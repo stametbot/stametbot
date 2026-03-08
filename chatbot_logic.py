@@ -1,1 +1,863 @@
+import replicate
+import re
+import json
+import os
 
+# Загружаем прайс из файла
+def load_procedures_prices():
+    """Загружает полный прайс из файла."""
+    try:
+        file_path = os.path.join(os.path.dirname(__file__), 'data', 'procedures.json')
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"❌ Ошибка загрузки прайса: {e}")
+        return {}
+
+def format_procedure_for_prompt(procedure):
+    """Форматирует процедуру для включения в промпт с описаниями аппаратов."""
+    result = f"\n• {procedure.get('name', '')}"
+    
+    # Добавляем описание если есть
+    if procedure.get('description'):
+        result += f" — {procedure['description']}"
+    
+    # Добавляем аппарат и технологию если есть
+    if procedure.get('apparatus'):
+        result += f"\n  Аппарат: {procedure['apparatus']}"
+    
+    if procedure.get('technology'):
+        result += f"\n  Технология: {procedure['technology']}"
+    
+    if procedure.get('country'):
+        result += f"\n  Страна производства: {procedure['country']}"
+    
+    # Добавляем показания если есть
+    if procedure.get('indications'):
+        result += f"\n  Показания: {', '.join(procedure['indications'][:3])}"
+    
+    # Обрабатываем разные типы цен
+    if procedure.get('id') == 'mesotherapy':
+        # Мезотерапия со вложенной структурой
+        result += "\n  Препараты (при оплате 5 сеансов -10%):"
+        for category, preps in procedure.get('procedures', {}).items():
+            result += f"\n    {category}:"
+            for prep, price in preps.items():
+                result += f"\n      - {prep}: {price} руб."
+    
+    elif procedure.get('id') == 'face_cleaning':
+        # Чистки лица и пилинги
+        if procedure.get('peels'):
+            result += "\n  Пилинги:"
+            for peel_name, peel_price in procedure['peels'].items():
+                result += f"\n    - {peel_name}: {peel_price} руб."
+        
+        if procedure.get('advanced_cleaning'):
+            result += "\n  Чистки:"
+            for clean_name, clean_price in procedure['advanced_cleaning'].items():
+                result += f"\n    - {clean_name}: {clean_price} руб."
+    
+    elif procedure.get('id') == 'biorevitalization':
+        # Биоревитализация с препаратами
+        if procedure.get('preparations'):
+            result += "\n  Препараты:"
+            for prep_name, prep_price in list(procedure['preparations'].items())[:5]:  # Первые 5
+                result += f"\n    - {prep_name}: {prep_price} руб."
+    
+    elif procedure.get('id') in ['laser_epilation_innovation', 'laser_epilation_quanta']:
+        # Лазерная эпиляция с комплексами
+        if procedure.get('prices'):
+            result += "\n  Основные зоны:"
+            for zone, price in list(procedure['prices'].items())[:3]:  # Первые 3 зоны
+                result += f"\n    - {zone}: {price} руб."
+        
+        if procedure.get('complexes'):
+            result += "\n  Комплексы:"
+            for complex_name, price in procedure['complexes'].items():
+                result += f"\n    - {complex_name}: {price} руб."
+    
+    elif procedure.get('prices'):
+        # Стандартная структура цен
+        if isinstance(procedure['prices'], dict):
+            result += "\n  Цены:"
+            for item, price in list(procedure['prices'].items())[:5]:  # Первые 5 позиций
+                result += f"\n    - {item}: {price} руб."
+        else:
+            result += f"\n  Цена: {procedure['prices']} руб."
+    
+    # Добавляем курсы если есть
+    if procedure.get('courses'):
+        result += "\n  Курсы:"
+        for course_name, course_price in procedure['courses'].items():
+            result += f"\n    - {course_name}: {course_price} руб."
+    
+    # Добавляем примечание и скидки
+    if procedure.get('note'):
+        result += f"\n  Примечание: {procedure['note']}"
+    
+    if procedure.get('discount'):
+        result += f"\n  Скидка: {procedure['discount']}"
+    
+    return result
+
+def create_system_prompt():
+    """Создает SYSTEM_PROMPT с актуальным прайсом и описаниями аппаратов."""
+    procedures_data = load_procedures_prices()
+    
+    base_prompt = """
+Ты — Александра, менеджер клиники эстетической медицины GLADIS в Сочи.
+
+ТВОЙ СТИЛЬ ОБЩЕНИЯ:
+- Дружелюбная, профессиональная, эксперт по всем процедурам клиники
+- ОТВЕЧАЙ НА ВСЕ ВОПРОСЫ о процедурах, используя прайс ниже
+- Если спрашивают о процедуре — расскажи что это, зачем делают и УКАЖИ ЦЕНУ из прайса
+- ОПИСЫВАЙ АППАРАТЫ когда спрашивают про оборудование или технологию
+- Если хотят записаться — попроси имя и телефон
+- ИСПОЛЬЗУЙ ПРАЙС НИЖЕ для точных цен и информации
+- УЧИТЫВАЙ КОНТЕКСТ предыдущих сообщений о процедурах
+
+ВАЖНЫЕ ПРАВИЛА:
+1. НИКОГДА не говори "у нас нет такой процедуры"! ВСЕ процедуры из списка ниже доступны.
+2. Если клиент спрашивает общую категорию (например "пилинг") — перечисли ВСЕ варианты из этой категории с ценами.
+3. Если спрашивают конкретную процедуру — найди ее в списке и дай точную цену.
+4. Представляйся только при первом сообщении.
+5. Контакты добавляй только когда клиент хочет записаться.
+6. При вопросах об аппаратах — описывай оборудование и его преимущества.
+7. При вопросах о пигментации — рекомендуй фотоомоложение Lumecca как лучший способ.
+8. Если клиент хочет записаться, но не указал процедуру — УТОЧНИ какую процедуру он хочет, особенно если ранее обсуждалась какая-то процедура.
+
+ВАЖНО ПРО АППАРАТЫ:
+- Лазерная эпиляция: Innovation (гибридный, Россия) и Quanta System (александритовый, Италия)
+- Фотоомоложение: Lumecca (США) — лучший для пигментации
+- SMAS-лифтинг: Ulthera 3-го поколения
+- Микроигольчатый RF: Morpheus
+- ФДТ: Revixan Quattro
+
+КОНТАКТЫ КЛИНИКИ (добавляй только когда нужно):
+📞 Телефон: 8-928-458-32-88
+📍 Адреса:
+   • Сочи: ул. Воровского, 22
+   • Адлер: ул. Кирова, д. 26а
+⏰ Работаем ежедневно с 10:00 до 20:00
+
+ВАЖНО: Рассрочку и кредит НЕ предоставляем!
+"""
+
+    # Формируем детальный прайс
+    price_section = "\n" + "="*60 + "\n"
+    price_section += "📋 ПОЛНЫЙ ПРАЙС И ОПИСАНИЯ ПРОЦЕДУР GLADIS\n"
+    price_section += "="*60 + "\n\n"
+    
+    if procedures_data and 'procedures' in procedures_data:
+        # Группируем процедуры по категориям для удобства
+        categories = {}
+        
+        for procedure in procedures_data['procedures']:
+            category = procedure.get('category', 'другое')
+            
+            if category not in categories:
+                categories[category] = []
+            
+            categories[category].append(format_procedure_for_prompt(procedure))
+        
+        # Категории для отображения
+        category_names = {
+            'эпиляция': '🔥 ЛАЗЕРНАЯ ЭПИЛЯЦИЯ',
+            'чистка': '✨ ЧИСТКА ЛИЦА И ПИЛИНГИ',
+            'лифтинг': '🌟 ЛИФТИНГ И ОМОЛОЖЕНИЕ',
+            'омоложение': '💫 АППАРАТНОЕ ОМОЛОЖЕНИЕ',
+            'инъекции': '💉 ИНЪЕКЦИОННАЯ КОСМЕТОЛОГИЯ',
+            'мезотерапия': '💉 МЕЗОТЕРАПИЯ',
+            'брови_ресницы': '👁 БРОВИ И РЕСНИЦЫ',
+            'макияж': '💄 ПЕРМАНЕНТНЫЙ МАКИЯЖ',
+            'удаление': '❌ УДАЛЕНИЕ ТАТУ И ТАТУАЖА',
+            'лечение': '🏥 ЛЕЧЕБНЫЕ ПРОЦЕДУРЫ',
+            'консультация': '👨‍⚕️ ПРИЕМ ВРАЧЕЙ',
+            'уход': '🌸 УХОДОВЫЕ ПРОЦЕДУРЫ',
+            'массаж': '💆 МАССАЖ',
+            'капельницы': '💧 АВТОРСКИЕ КАПЕЛЬНИЦЫ',
+            'солярий': '☀️ СОЛЯРИЙ МЕЗАЗИМ'
+        }
+        
+        for category_ru, procedures_list in categories.items():
+            category_display = category_names.get(category_ru, category_ru.upper())
+            price_section += f"\n{category_display}:\n"
+            price_section += "-" * 40 + "\n"
+            for proc_desc in procedures_list:
+                price_section += proc_desc + "\n"
+    
+    else:
+        # Запасной прайс если файл не загрузился
+        price_section += """
+Основные процедуры и цены:
+
+1. ЛАЗЕРНАЯ ЭПИЛЯЦИЯ:
+   • Innovation (гибридный, Россия): подмышки 1300 руб, тотал бикини 2900 руб
+   • Quanta System (александритовый, Италия): подмышки 1400 руб, тотал бикини 3500 руб
+
+2. ФОТООМОЛОЖЕНИЕ:
+   • Lumecca (США) — лучший для пигментации: лицо 4000 руб
+   • Record 618 Active
+
+3. КАПЕЛЬНИЦЫ (23 вида):
+   • Детокс восстановление: 5900 руб
+   • Хорошо погуляли: 5500 руб
+   • При оплате 3-х капельниц -10%
+"""
+    
+    # Информация о клинике
+    if procedures_data and 'clinic_info' in procedures_data:
+        clinic = procedures_data['clinic_info']
+        price_section += "\n" + "="*60 + "\n"
+        price_section += "🏥 ИНФОРМАЦИЯ О КЛИНИКЕ:\n"
+        price_section += "="*60 + "\n"
+        price_section += f"📍 Адрес в Сочи: {clinic.get('address_sochi', 'ул. Воровского, 22')}\n"
+        price_section += f"📍 Адрес в Адлере: {clinic.get('address_adler', 'ул. Кирова 26а')}\n"
+        price_section += f"📞 Телефон: {clinic.get('phone', '8-928-458-32-88')}\n"
+        price_section += f"⏰ Часы работы: {clinic.get('hours', 'Ежедневно 10:00–20:00')}\n"
+        price_section += f"💳 {clinic.get('no_installment', 'Рассрочка и кредитование предоставляются')}\n"
+    
+    full_prompt = base_prompt + price_section
+    
+    return full_prompt
+
+def handle_pigmentation_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли о пигментных пятнах и возвращает ответ."""
+    message_lower = message.lower()
+    keywords = ["пигмент", "пятн", "веснушк", "пигментац", "темные пятна", "пигменти", "веснушки"]
+    
+    if any(keyword in message_lower for keyword in keywords):
+        procedures_data = load_procedures_prices()
+        
+        # Ищем фотоомоложение
+        for procedure in procedures_data.get('procedures', []):
+            if procedure.get('id') == 'photo_rejuvenation_lumecca':
+                description = procedure.get('description', 'Современный аппарат для удаления пигментных пятен')
+                apparatus = procedure.get('apparatus', 'Lumecca (США)')
+                prices = procedure.get('prices', {})
+                
+                response = f"""Для удаления пигментных пятен рекомендую фотоомоложение на аппарате {apparatus}!
+                
+{description}
+
+Цены:
+- Лицо: {prices.get('лицо', 4000)} руб.
+- Лицо + шея: {prices.get('лицо + шея', 5500)} руб.
+- Кисти рук: {prices.get('кисти рук', 3000)} руб.
+
+{procedure.get('note', 'Лучший способ удаления пигментации. Результат после 1-3 процедур.')}
+
+Также есть курсы со скидкой:
+- 3 процедуры: {procedure.get('courses', {}).get('курс 3 процедуры', 10000)} руб.
+- 5 процедур: {procedure.get('courses', {}).get('курс 5 процедур', 15000)} руб.
+
+Хотите записаться на консультацию?"""
+                
+                return True, response
+        
+        # Если не нашли в данных
+        return True, """Для удаления пигментных пятен лучший способ — фотоомоложение на аппарате Lumecca (США)! 
+Это современный IPL-аппарат, который безопасно и эффективно убирает пигментацию за 1-3 процедуры.
+
+Цены:
+- Лицо: 4000 руб.
+- Лицо + шея: 5500 руб.
+- Курс 3 процедуры: 10000 руб.
+
+Результат виден уже после первой процедуры. Хотите записаться?"""
+    
+    return False, ""
+
+def handle_apparatus_question_improved(message: str, last_procedure: str = None) -> tuple[bool, str]:
+    """Улучшенная проверка: ТОЛЬКО явные вопросы про аппараты без контекста записи."""
+    message_lower = message.lower()
+    
+    # Если есть контекст процедуры и сообщение похоже на запись - пропускаем
+    if last_procedure and any(word in message_lower for word in ["завтра", "сегодня", "бикини", "подмышки"]):
+        return False, ""
+    
+    # ОЧЕНЬ явные вопросы про аппараты
+    explicit_apparatus_questions = [
+        "что такое инновейшен", "что такое innovation", 
+        "что такое quanta", "что такое кванта",
+        "что такое lumecca", "что такое люмекка",
+        "расскажи про аппарат", "какой аппарат лучше",
+        "чем отличается инновейшен", "какой лазер лучше",
+        "что за аппарат", "какое оборудование",
+        "аппараты", "оборудование", "техника"
+    ]
+    
+    for question in explicit_apparatus_questions:
+        if question in message_lower:
+            # Вместо вызова несуществующей функции, возвращаем ответ напрямую
+            if "innovation" in message_lower or "инновейшен" in message_lower:
+                return True, """🔬 Innovation — это гибридный лазер (диодный + александритовый) российского производства. 
+                
+Преимущества:
+• Подходит для всех фототипов кожи
+• Минимальные болевые ощущения
+• Высокая эффективность на светлых и тонких волосах
+
+Цены:
+• Подмышки: 1300 руб.
+• Тотал бикини: 2900 руб.
+• Ноги полностью: 4500 руб.
+
+Хотите записаться на консультацию?"""
+            
+            elif "quanta" in message_lower or "кванта" in message_lower:
+                return True, """🔬 Quanta System — александритовый лазер итальянского производства. 
+                
+Преимущества:
+• Лучший результат на смуглой коже
+• Высокая скорость обработки
+• Эффективен на темных и грубых волосах
+
+Цены:
+• Подмышки: 1400 руб.
+• Тотал бикини: 3500 руб.
+• Ноги полностью: 5800 руб.
+
+Хотите записаться?"""
+            
+            elif "lumecca" in message_lower or "люмекка" in message_lower:
+                return True, """✨ Lumecca (США) — современный аппарат для интенсивного импульсного света (IPL).
+                
+Лучший способ для:
+• Удаления пигментных пятен
+• Удаления сосудистых сеточек
+• Омоложения кожи
+
+Цены:
+• Лицо: 4000 руб.
+• Лицо + шея: 5500 руб.
+• Курс 3 процедуры: 10000 руб.
+
+Хотите записаться?"""
+            
+            else:
+                return True, """В клинике GLADIS используется современное оборудование:
+
+🔬 Лазерная эпиляция:
+• Innovation (гибридный, Россия)
+• Quanta System (александритовый, Италия)
+
+✨ Фотоомоложение:
+• Lumecca (США) — лучший для пигментации
+
+⚡ Лифтинг:
+• Morpheus (микроигольчатый RF)
+• Ulthera (SMAS-лифтинг)
+
+💡 Фотодинамическая терапия:
+• Revixan Quattro
+
+Хотите подробнее узнать о какой-то процедуре или записаться?"""
+    
+    return False, ""
+
+def detect_application_intent_with_ai(api_key: str, conversation_history: str, current_message: str) -> bool:
+    """
+    Использует AI для определения, хочет ли клиент записаться на процедуру.
+    Возвращает True если клиент хочет записаться.
+    """
+    try:
+        prompt = f"""Проанализируй диалог и определи, хочет ли клиент записаться на процедуру в клинике косметологии.
+
+ПРАВИЛА АНАЛИЗА:
+1. Клиент ХОЧЕТ записаться если:
+   - Явно говорит "хочу записаться", "запишите меня", "запишите на"
+   - Просит записать на конкретную дату/время
+   - Дает свое имя и телефон после обсуждения процедуры
+   - Проходит конкретную процедуру (эпиляция бикини, чистка лица и т.д.)
+   - Спрашивает о записи и предоставляет контакты
+
+2. Клиент НЕ хочет записаться если:
+   - Только спрашивает информацию
+   - Просто интересуется без контактов
+   - Обсуждает в общем без конкретных планов
+
+ИСТОРИЯ ДИАЛОГА:
+{conversation_history}
+
+ПОСЛЕДНЕЕ СООБЩЕНИЕ КЛИЕНТА:
+"{current_message}"
+
+ВОПРОС: Клиент хочет записаться на процедуру? 
+
+ОТВЕТ (ТОЛЬКО "ДА" или "НЕТ"):"""
+
+        client = replicate.Client(api_token=api_key)
+        
+        output = client.run(
+            "meta/meta-llama-3-70b-instruct",
+            input={
+                "prompt": prompt,
+                "max_tokens": 10,
+                "temperature": 0.1,
+                "top_p": 0.9
+            }
+        )
+        
+        # Обрабатываем ответ
+        result = ""
+        if hasattr(output, '__iter__') and not isinstance(output, str):
+            for chunk in output:
+                if isinstance(chunk, str):
+                    result += chunk
+                else:
+                    result += str(chunk)
+        elif isinstance(output, str):
+            result = output
+        else:
+            result = str(output)
+        
+        result = result.strip().lower()
+        print(f"🤖 AI анализ намерения: '{result}'")
+        
+        # Проверяем ответ
+        if "да" in result:
+            return True
+        elif "нет" in result:
+            return False
+        else:
+            # Если AI дал неоднозначный ответ, проверяем по ключевым словам
+            current_lower = current_message.lower()
+            action_words = ["запис", "хочу", "нужно", "можно", "готов", "давайте"]
+            return any(word in current_lower for word in action_words)
+            
+    except Exception as e:
+        print(f"❌ Ошибка AI при анализе намерения: {str(e)}")
+        # Fallback: если в сообщении есть слова о действии
+        current_lower = current_message.lower()
+        action_words = ["запис", "хочу", "нужно", "можно", "готов", "давайте"]
+        return any(word in current_lower for word in action_words)
+
+def is_simple_greeting(message: str) -> bool:
+    """Проверяет, является ли сообщение простым приветствием."""
+    message_lower = message.lower()
+    
+    greetings = [
+        "добрый день", "добрый вечер", "доброе утро",
+        "здравствуйте", "привет", "здрасьте", "приветствую",
+        "доброго времени суток", "доброй ночи", "добрый",
+        "здравия", "приветик", "доброго"
+    ]
+    
+    # Если сообщение состоит только из приветствия
+    for greeting in greetings:
+        if greeting in message_lower:
+            clean_msg = message_lower.replace(greeting, "").strip()
+            if not clean_msg or len(clean_msg.replace(" ", "")) < 3:
+                return True
+    
+    return False
+
+def is_registration_request(message: str) -> bool:
+    """Определяет, хочет ли клиент записаться (улучшенная версия)."""
+    message_lower = message.lower()
+    
+    # Явные фразы
+    if "запис" in message_lower:
+        if any(word in message_lower for word in ["хочу", "можно", "нужно", "готов", "давайте"]):
+            return True
+        if any(word in message_lower for word in ["завтра", "сегодня", "после"]):
+            return True
+    
+    # Указание времени + зоны процедуры
+    if any(word in message_lower for word in ["завтра", "сегодня", "после"]):
+        if any(word in message_lower for word in ["бикини", "подмышки", "ноги", "голени", "бедра"]):
+            return True
+    
+    # Конкретная процедура + время
+    procedure_keywords = ["эпиляция", "чистка", "ботокс", "пилинг", "лифтинг"]
+    time_keywords = ["завтра", "сегодня", "в ", "во ", "после"]
+    
+    if any(proc in message_lower for proc in procedure_keywords):
+        if any(time in message_lower for time in time_keywords):
+            return True
+    
+    return False
+    
+def should_add_contacts_to_reply(user_message: str, bot_reply: str, is_first_message: bool = False) -> bool:
+    """
+    Определяет, нужно ли добавлять контакты к ответу.
+    """
+    user_lower = user_message.lower()
+    reply_lower = bot_reply.lower()
+    
+    # Всегда добавляем контакты если:
+    # 1. Клиент явно хочет записаться
+    if is_registration_request(user_message):
+        return True
+    
+    # 2. Клиент спрашивает контакты
+    if any(word in user_lower for word in ["телефон", "адрес", "контакт", "позвонить", "номер", "как связаться"]):
+        return True
+    
+    # 3. В ответе уже просят контакты (явно)
+    if any(phrase in reply_lower for phrase in [
+        "для записи мне нужно ваше имя и телефон",
+        "укажите ваше имя и телефон для записи",
+        "назовите имя и телефон для связи",
+        "мне нужны ваши контакты для записи"
+    ]):
+        return True
+    
+    # 4. Это завершение консультации (длинный ответ) И клиент проявлял интерес
+    if len(bot_reply) > 300 and ("руб" in reply_lower or "стоимость" in reply_lower):
+        # Проверяем, было ли в диалоге упоминание о записи
+        if "запис" in user_lower:
+            return True
+    
+    # Не добавляем контакты если:
+    # 1. Это просто приветствие
+    if is_simple_greeting(user_message):
+        return False
+    
+    # 2. Это простой информационный вопрос
+    if (len(bot_reply) < 200 and 
+        "?" in user_message and 
+        not is_registration_request(user_message)):
+        return False
+    
+    return False
+
+def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = False, 
+                      has_name: bool = False, has_phone: bool = False,
+                      telegram_sent: bool = False, last_procedure: str = None) -> str:
+    """Генерация ответа бота через Replicate API с максимальным использованием AI."""
+    try:
+        print(f"\n🤖 Генерация ответа AI")
+        print(f"   Сообщение: '{message}'")
+        print(f"   Первое в сессии: {is_first_in_session}")
+        print(f"   Есть имя: {has_name}, Есть телефон: {has_phone}")
+        print(f"   Telegram отправлен: {telegram_sent}")
+        print(f"   Контекст процедуры: {last_procedure or 'Нет контекста'}")
+        
+        message_lower = message.lower()
+        
+        # 1. ОЧЕНЬ простые случаи обрабатываем сразу (оптимизация)
+        if is_simple_greeting(message_lower):
+            if is_first_in_session:
+                return "Здравствуйте! Клиника GLADIS, меня зовут Александра. Чем могу вам помочь?"
+            else:
+                return "Чем могу вам помочь?"
+        
+        # 2. Вопросы про пигментацию (очень специфично)
+        is_pigmentation, pigmentation_response = handle_pigmentation_question(message)
+        if is_pigmentation:
+            print("🎯 Вопрос про пигментацию - использую подготовленный ответ")
+            return pigmentation_response
+        
+        # 3. Проверяем, явный ли это запрос на запись
+        basic_registration_check = is_registration_request(message)
+        
+        # 4. Вопросы про аппараты - ТОЛЬКО если это точно не запрос и явный вопрос
+        if not basic_registration_check:
+            is_apparatus, apparatus_response = handle_apparatus_question_improved(message, last_procedure)
+            if is_apparatus:
+                print("⚙️ Явный вопрос про аппарат - использую подготовленный ответ")
+                return apparatus_response
+        
+        # 5. ВСЁ ОСТАЛЬНОЕ отдаем AI с полным контекстом
+        system_prompt = create_system_prompt()
+        
+        # Формируем БОГАТЫЙ контекст для AI
+        context_lines = []
+        
+        # Информация о сессии
+        context_lines.append(f"📊 СТАТУС СЕССИИ:")
+        context_lines.append(f"   • {'Начало диалога - представься' if is_first_in_session else 'Диалог уже идет - не представляйся'}")
+        context_lines.append(f"   • {'✅ Есть имя клиента' if has_name else '❌ Имя не указано'}")
+        context_lines.append(f"   • {'✅ Есть телефон клиента' if has_phone else '❌ Телефон не указан'}")
+        
+        if telegram_sent:
+            context_lines.append(f"   • ✅ ЗАЯВКА УЖЕ ОТПРАВЛЕНА МЕНЕДЖЕРУ")
+            context_lines.append(f"   • Клиент продолжает диалог после отправки заявки - отвечай на вопросы как обычно, не предлагай записаться повторно")
+        else:
+            context_lines.append(f"   • 📝 Заявка еще не отправлена")
+        
+        # Контекст процедуры
+        if last_procedure:
+            context_lines.append(f"\n📋 ИСТОРИЯ ПРОЦЕДУРЫ:")
+            context_lines.append(f"   • Ранее обсуждалась/интересовались: {last_procedure}")
+            context_lines.append(f"   • Если клиент хочет записаться без уточнений - предполагаем эту процедуру")
+        
+        # Анализ текущего сообщения
+        context_lines.append(f"\n🎯 АНАЛИЗ ТЕКУЩЕГО СООБЩЕНИЯ:")
+        context_lines.append(f"   • Сообщение: \"{message}\"")
+        
+        # Определяем тип сообщения (для AI)
+        msg_type = []
+        if basic_registration_check:
+            msg_type.append("запрос на запись")
+        if "цена" in message_lower or "стоимость" in message_lower or "сколько" in message_lower:
+            msg_type.append("вопрос о цене")
+        if any(word in message_lower for word in ["бикини", "подмышки", "ноги", "лицо", "шея"]):
+            msg_type.append("указана конкретная зона")
+        if "завтра" in message_lower or "сегодня" in message_lower:
+            msg_type.append("указано время")
+        
+        if msg_type:
+            context_lines.append(f"   • Тип: {', '.join(msg_type)}")
+        
+        context_section = "\n".join(context_lines)
+        
+        # ОСНОВНОЙ ПРОМПТ ДЛЯ AI
+        full_prompt = f"""{system_prompt}
+
+================================================================================
+КОНТЕКСТ ДЛЯ AI (ЭТО ВИДИШЬ ТОЛЬКО ТЫ):
+{context_section}
+================================================================================
+
+🧠 ТВОЯ ЗАДАЧА КАК АЛЕКСАНДРЫ (менеджер клиники GLADIS):
+
+1. ПРОАНИЛИЗИРУЙ сообщение клиента и контекст выше
+2. ОПРЕДЕЛИ что хочет клиент:
+   - ✅ ЗАПИСАТЬСЯ на процедуру → действуй по шагу A
+   - 📋 УЗНАТЬ информацию/цену → действуй по шагу B
+   - 🔧 УТОЧНИТЬ детали → действуй по шагу C
+
+ШАГ A: ЕСЛИ КЛИЕНТ ХОЧЕТ ЗАПИСАТЬСЯ
+{"1. Клиент явно хочет записаться (есть слова 'записаться', 'завтра' и т.д.)" if basic_registration_check else ""}
+{"2. Используй контекст процедуры если клиент не уточнил: '{last_procedure}'" if last_procedure and not any(word in message_lower for word in ["эпиляция", "чистка", "ботокс"]) else ""}
+3. ДЕЙСТВИЯ:
+   • Подтверди процедуру/зону если указаны
+   • Если процедура не ясна - УТОЧНИ ("На какую процедуру хотите записаться?")
+   • ПОПРОСИ контакты: "Укажите ваше имя и телефон для записи"
+   • Если уже есть имя/телефон - подтверди запись
+
+ШАГ B: ЕСЛИ КЛИЕНТ СПРАШИВАЕТ ИНФОРМАЦИЮ
+1. Дай ПОЛНЫЙ ответ используя прайс ниже
+2. Упомяни аппараты если спрашивают про оборудование
+3. Предложи записаться если уместно
+
+ШАГ C: ЕСЛИ КЛИЕНТ УТОЧНЯЕТ ДЕТАЛИ
+{"1. Клиент уточняет детали процедуры: '{last_procedure}'" if last_procedure else ""}
+1. Ответь на вопрос используя прайс
+2. Помоги определиться
+3. Предложи следующий шаг (запись или дополнительная информация)
+
+{'⚠️ ВАЖНО: Заявка клиента уже отправлена менеджеру! Отвечай на вопросы как обычно, НЕ предлагай записаться повторно.' if telegram_sent else ''}
+
+================================================================================
+КЛИЕНТ ПИШЕТ: "{message}"
+
+ТВОЙ ОТВЕТ (Александра из GLADIS):
+{"1. Представься: 'Здравствуйте! Клиника GLADIS, меня зовут Александра.'" if is_first_in_session else "1. НЕ представляйся снова"}
+2. Ответь согласно анализу выше
+3. Будь экспертом, но дружелюбной
+4. Используй смайлики если уместно
+5. {"Упомяни скидки/акции если спрашивают про цены" if "цена" in message_lower or "стоимость" in message_lower else ""}
+
+ОТВЕТ:"""
+        
+        # Используем AI
+        client = replicate.Client(api_token=api_key)
+        
+        output = client.run(
+            "meta/meta-llama-3-70b-instruct",
+            input={
+                "prompt": full_prompt,
+                "max_tokens": 1000,
+                "temperature": 0.7,
+                "top_p": 0.9
+            }
+        )
+        
+        # Обрабатываем ответ
+        result = ""
+        if hasattr(output, '__iter__') and not isinstance(output, str):
+            for chunk in output:
+                if isinstance(chunk, str):
+                    result += chunk
+                else:
+                    result += str(chunk)
+        elif isinstance(output, str):
+            result = output
+        else:
+            result = str(output)
+        
+        result = result.strip()
+        print(f"   Ответ AI (сырой): '{result[:200]}...'")
+        
+        # Очищаем ответ если нужно
+        if not result or len(result) < 10:
+            result = "Извините, не удалось обработать запрос. Пожалуйста, позвоните нам по телефону 8-928-458-32-88 для консультации."
+        
+        # Убираем повторные приветствия если не первое сообщение
+        if not is_first_in_session:
+            result = re.sub(r'^Здравствуйте[!\.]?\s*', '', result)
+            result = re.sub(r'^Добрый день[!\.]?\s*', '', result)
+            result = re.sub(r'^Добрый вечер[!\.]?\s*', '', result)
+            result = re.sub(r'^Привет[!\.]?\s*', '', result)
+            result = re.sub(r'^Меня зовут Александра[!\.]?\s*', '', result)
+        
+        # Автокоррекция: если AI забыл попросить контакты при явной записи (только если заявка еще не отправлена)
+        if basic_registration_check and "запис" in message_lower and not telegram_sent:
+            # Проверяем, попросил ли AI контакты
+            has_contacts_request = any(phrase in result.lower() for phrase in [
+                "имя и телефон", "ваше имя", "номер телефона", "контакт", "телефон"
+            ])
+            
+            if not has_contacts_request and "спасибо" not in result.lower():
+                # Добавляем запрос контактов
+                result += "\n\nДля записи укажите, пожалуйста, ваше имя и телефон для связи."
+        
+        return result
+            
+    except Exception as e:
+        print(f"❌ Ошибка AI: {str(e)}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
+        
+        # Fallback на случай ошибки AI
+        message_lower = message.lower()
+        
+        if "адрес" in message_lower or "телефон" in message_lower:
+            return "Клиника GLADIS:\n📞 Телефон: 8-928-458-32-88\n📍 Адреса: Сочи, ул. Воровского, 22 и Адлер, ул. Кирова, д. 26а"
+        elif "пигмент" in message_lower or "пятн" in message_lower:
+            return "Для удаления пигментных пятен лучший способ — фотоомоложение на аппарате Lumecca (США)! Цена от 4000 руб. за лицо. Хотите записаться?"
+        elif telegram_sent:
+            # Если заявка уже отправлена, но AI упал
+            return "Извините за техническую неполадку. Чем еще могу помочь? Если есть вопросы по процедурам, спрашивайте!"
+        elif "запис" in message_lower:
+            if last_procedure:
+                return f"Для записи на {last_procedure} укажите ваше имя и телефон. Телефон клиники: 8-928-458-32-88"
+            else:
+                return "Для записи укажите ваше имя и телефон. Также, пожалуйста, уточните на какую процедуру хотите записаться. Телефон клиники: 8-928-458-32-88"
+        else:
+            return "Для консультации по процедурам позвоните по телефону 8-928-458-32-88"
+
+def extract_name_with_ai(api_key: str, message: str) -> str:
+    """
+    Использует AI для извлечения имени человека из сообщения.
+    """
+    try:
+        prompt = f"""Определи, есть ли в сообщении имя человека. Если есть - верни ТОЛЬКО имя. Если нет - верни "not_found".
+
+ВОТ ПРАВИЛА:
+1. Имя - это личное имя человека (Анна, Иван, Мария, Дмитрий и т.д.)
+2. НЕ имя: названия процедур (ботокс, эпиляция, чистка, пилинг и т.д.)
+3. НЕ имя: общие слова (привет, здравствуйте, хочу, записаться и т.д.)
+4. Если сомневаешься - верни "not_found"
+
+Примеры:
+Сообщение: "Меня зовут Анна, хочу на ботокс" → Ответ: "Анна"
+Сообщение: "Хочу записаться на ботокс" → Ответ: "not_found"
+Сообщение: "Иван, 89161234567" → Ответ: "Иван"
+Сообщение: "Ботокс на губы" → Ответ: "not_found"
+
+Сообщение: "{message}"
+
+Ответ (только имя или "not_found"):"""
+
+        client = replicate.Client(api_token=api_key)
+        
+        output = client.run(
+            "meta/meta-llama-3-70b-instruct",
+            input={
+                "prompt": prompt,
+                "max_tokens": 20,
+                "temperature": 0.1,
+                "top_p": 0.9
+            }
+        )
+        
+        # Обрабатываем ответ
+        result = ""
+        if hasattr(output, '__iter__') and not isinstance(output, str):
+            for chunk in output:
+                if isinstance(chunk, str):
+                    result += chunk
+                else:
+                    result += str(chunk)
+        elif isinstance(output, str):
+            result = output
+        else:
+            result = str(output)
+        
+        result = result.strip().lower()
+        print(f"🔍 AI анализ имени из '{message}': получил '{result}'")
+        
+        # Очищаем ответ
+        if result in ['not_found', 'none', 'null', 'нет', 'no name', '']:
+            return None
+        
+        # Удаляем кавычки и лишние символы
+        result = re.sub(r'["\'\.,!?]', '', result).strip()
+        
+        if not result:
+            return None
+        
+        # Фильтруем процедуры
+        procedure_keywords = [
+            'ботокс', 'ботулин', 'диспорт', 'релатокс', 'ботулакс',
+            'эпиляция', 'лазерная', 'биоревитализация', 'чистка',
+            'пилинг', 'лифтинг', 'смас', 'морфиус', 'перманентный',
+            'макияж', 'контурная', 'пластика', 'мезотерапия',
+            'коллаген', 'химический', 'ретиноловый', 'карбоновый'
+        ]
+        
+        if any(proc in result for proc in procedure_keywords):
+            print(f"⚠️ Отфильтровано: '{result}' похоже на процедуру")
+            return None
+        
+        # Проверяем что это похоже на имя
+        if not re.match(r'^[А-ЯЁа-яё\-]+$', result):
+            return None
+        
+        # Капитализируем первую букву
+        if '-' in result:
+            parts = result.split('-')
+            result = '-'.join([part.capitalize() for part in parts])
+        else:
+            result = result.capitalize()
+        
+        # Длина имени должна быть разумной
+        if len(result) < 2 or len(result) > 30:
+            return None
+        
+        return result if result else None
+            
+    except Exception as e:
+        print(f"❌ Ошибка AI при извлечении имени: {str(e)}")
+        return None
+
+def check_interesting_application(text: str):
+    """
+    Проверяем, является ли сообщение заявкой на процедуру.
+    """
+    t = text.lower()
+    
+    # РАСШИРЕННЫЙ СПИСОК КЛЮЧЕВЫХ СЛОВ
+    procedure_keywords = [
+        "записаться", "запись", "записать", "хочу", "можно", "мне нужно",
+        "нужно", "готов", "давайте", "интересует", "интересуюсь", "процедур",
+        "эпиляция", "лазерная", "ботокс", "ботулин", "чистка",
+        "пилинг", "омоложение", "лифтинг", "smas", "морфиус",
+        "биоревитализация", "инъекция", "укол", "гиалуроновая",
+        "консультация", "врач", "косметолог", "прием",
+        "брови", "ресницы", "ламинирование", "наращивание",
+        "тату", "татуировка", "удаление", "перманент",
+        "массаж", "микротоки", "мезотерапия", "роликовый",
+        "коллаген", "химический", "ретиноловый", "карбоновый",
+        "стоит", "цена", "прайс", "стоимость", "сколько",
+        "бикини", "подмышки", "голени", "бедра", "лицо",
+        "шея", "спина", "живот", "руки", "ноги",
+        "капельниц", "детокс", "витамин", "омоложение",
+        "пигмент", "пятн", "веснушк", "аппарат", "лазер"
+    ]
+    
+    contact_keywords = ["имя", "зовут", "телефон", "телефоне", "номер", "позвонить", "мне зовут"]
+    
+    has_procedure = any(keyword in t for keyword in procedure_keywords)
+    has_contacts = any(keyword in t for keyword in contact_keywords)
+    
+    print(f"🔍 Проверка заявки: '{text[:100]}...'")
+    print(f"   Процедурные слова: {has_procedure}")
+    print(f"   Контактные слова: {has_contacts}")
+    
+    return has_procedure or has_contacts
