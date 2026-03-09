@@ -9,18 +9,44 @@ import os
 import asyncio
 import requests
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 
 # Хранилище сессий для Telegram пользователей
 telegram_sessions = {}
+
+# Константы для работы с лестницами (как в main.py)
+PRODUCT_KEYWORDS = {
+    'престиж': ['престиж', 'prestige', 'шаг 225', 'классическая'],
+    'престиж комфорт': ['престиж комфорт', 'комфорт', 'шаг 190'],
+    'престиж мини': ['престиж мини', 'мини', 'гусиный шаг', 'компактная'],
+    'элегант': ['элегант', 'elegant', 'шаг 230', 'изящная'],
+    'элегант комфорт': ['элегант комфорт', 'элегант комфорт', 'шаг 190'],
+    'каркас': ['каркас', 'металлический', 'для отделки', 'основа'],
+    'ступени': ['ступени', 'ступень', 'хвоя', 'бук', 'сосна', 'прямая ступень', 'угловая'],
+    'поручни': ['поручень', 'перила', 'ограждение', 'балясины'],
+    'комплектующие': ['модуль', 'подпорка', 'фланец', 'крепеж']
+}
+
+# Ключевые слова для определения материалов
+MATERIAL_KEYWORDS = {
+    'хвоя': ['хвоя', 'сосна', 'сосновые'],
+    'бук': ['бук', 'буковые']
+}
+
+# Ключевые слова для определения цветов
+COLOR_KEYWORDS = {
+    'слоновая кость': ['слоновая кость', 'ral 1015', 'бежевый', 'кремовый'],
+    'черный': ['черный', 'ral 9005', 'матовый черный'],
+    'алюминиевый': ['алюминиевый', 'ral 9006', 'металлик', 'серебристый']
+}
 
 def get_bot_token():
     """Возвращает токен бота"""
     return os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 async def cleanup_old_telegram_sessions():
-    """Очистка старых Telegram сессий (аналог cleanup_old_sessions из main.py)"""
+    """Очистка старых Telegram сессий"""
     try:
         now = datetime.now()
         to_delete = []
@@ -37,7 +63,7 @@ async def cleanup_old_telegram_sessions():
                 print(f"⏰ ТАЙМАУТ 10 минут (Telegram): отправляем неполную заявку")
                 
                 full_text = "\n".join(session_data.get('text_parts', []))
-                source = "Telegram (личка @gladisSochi)" if session_data.get('is_business') else "Telegram (личка боту)"
+                source = "Telegram (бизнес)" if session_data.get('is_business') else "Telegram (личка боту)"
                 
                 # Отправляем неполную заявку
                 from telegram_utils import send_incomplete_to_telegram
@@ -47,7 +73,7 @@ async def cleanup_old_telegram_sessions():
                     f"📱 ИСТОЧНИК: {source}\n\n{full_text}",
                     session_data.get('name'),
                     session_data.get('phone'),
-                    session_data.get('last_procedure')
+                    session_data.get('product_interest')
                 )
                 session_data['telegram_sent'] = True
                 session_data['incomplete_sent'] = True
@@ -76,8 +102,62 @@ async def periodic_cleanup():
         except Exception as e:
             print(f"❌ Ошибка в periodic_cleanup: {e}")
 
+def extract_product_from_message(message: str) -> Optional[str]:
+    """Извлекает упоминание товара из сообщения."""
+    message_lower = message.lower()
+    
+    for product, keywords in PRODUCT_KEYWORDS.items():
+        if any(keyword in message_lower for keyword in keywords):
+            return product
+    
+    return None
+
+def extract_material_from_message(message: str) -> Optional[str]:
+    """Извлекает упоминание материала из сообщения."""
+    message_lower = message.lower()
+    
+    for material, keywords in MATERIAL_KEYWORDS.items():
+        if any(keyword in message_lower for keyword in keywords):
+            return material
+    
+    return None
+
+def extract_color_from_message(message: str) -> Optional[str]:
+    """Извлекает упоминание цвета из сообщения."""
+    message_lower = message.lower()
+    
+    for color, keywords in COLOR_KEYWORDS.items():
+        if any(keyword in message_lower for keyword in keywords):
+            return color
+    
+    return None
+
+def extract_opening_height(message: str) -> Optional[str]:
+    """Извлекает высоту проема из сообщения."""
+    message_lower = message.lower()
+    
+    # Ищем высоту в мм
+    mm_pattern = r'(\d+)\s*мм'
+    mm_matches = re.findall(mm_pattern, message_lower)
+    if mm_matches:
+        return f"{mm_matches[0]} мм"
+    
+    # Ищем высоту в метрах
+    m_pattern = r'(\d+[.,]?\d*)\s*метр'
+    m_matches = re.findall(m_pattern, message_lower)
+    if m_matches:
+        height = float(m_matches[0].replace(',', '.')) * 1000
+        return f"{int(height)} мм"
+    
+    # Ищем просто числа, которые могут быть высотой
+    numbers = re.findall(r'\b(\d{4})\b', message_lower)
+    if numbers:
+        return f"{numbers[0]} мм"
+    
+    return None
+
 async def extract_contacts_from_message_ai(message: str, session: Dict[str, Any], api_key: str):
-    """Извлекает контакты и определяет процедуру с использованием AI"""
+    """Извлекает контакты и определяет интересующий товар с использованием AI"""
     try:
         message_lower = message.lower()
         
@@ -95,7 +175,7 @@ async def extract_contacts_from_message_ai(message: str, session: Dict[str, Any]
                 phone_matches.extend(matches)
                 break
         
-        if phone_matches and not session['phone']:
+        if phone_matches and not session.get('phone'):
             raw_phone = phone_matches[0]
             clean_phone = re.sub(r'\D', '', raw_phone)
             
@@ -121,18 +201,17 @@ async def extract_contacts_from_message_ai(message: str, session: Dict[str, Any]
             'вадим', 'рома', 'кирилл', 'игорь', 'вадим'
         ]
         
+        # Слова, которые не являются именами (названия моделей)
+        product_words = ['престиж', 'элегант', 'комфорт', 'мини', 'каркас', 'ступени', 'модуль']
+        
         for name in russian_names:
             name_lower = name.lower()
             
-            procedure_words = ['ботокс', 'эпиляция', 'лазер', 'коллаген', 
-                             'чистка', 'пилинг', 'смас', 'морфиус', 'александрит',
-                             'перманент', 'биоревитализация', 'инъекция', 'мезотерапия']
-            
-            is_procedure = any(proc in name_lower for proc in procedure_words)
+            is_product = any(prod in name_lower for prod in product_words)
             is_common_name = name_lower in common_russian_names
             is_near_phone = phone_matches and (abs(message.find(name) - message.find(phone_matches[0])) < 30)
             
-            if (is_common_name and not is_procedure) or (is_near_phone and not is_procedure):
+            if (is_common_name and not is_product) or (is_near_phone and not is_product):
                 temp_name = name
                 print(f"👤 Найдено возможное имя в сообщении: {temp_name}")
                 break
@@ -142,7 +221,7 @@ async def extract_contacts_from_message_ai(message: str, session: Dict[str, Any]
             print(f"✅ Обновлено имя в сессии: {session['name']}")
         
         # ===== AI ДЛЯ ИМЕНИ (если не нашли регулярками) =====
-        if (not session['name'] or session['name'].lower() in ['привет', 'здравствуйте', 'добрый']) and api_key and len(message.strip()) > 3:
+        if (not session.get('name') or session.get('name', '').lower() in ['привет', 'здравствуйте', 'добрый']) and api_key and len(message.strip()) > 3:
             try:
                 print(f"🔍 Использую AI для поиска имени в: '{message[:30]}...'")
                 from chatbot_logic import extract_name_with_ai
@@ -159,28 +238,51 @@ async def extract_contacts_from_message_ai(message: str, session: Dict[str, Any]
             except Exception as e:
                 print(f"⚠️ Ошибка AI при извлечении имени: {e}")
         
-        # ===== AI ДЛЯ ОПРЕДЕЛЕНИЯ ПРОЦЕДУРЫ =====
-        if api_key and len(message.strip()) > 3:
+        # ===== ОПРЕДЕЛЕНИЕ МОДЕЛИ ЛЕСТНИЦЫ =====
+        detected_product = extract_product_from_message(message)
+        if detected_product:
+            session['product_interest'] = detected_product
+            session['product_mentioned'] = True
+            print(f"📋 Определена модель: {detected_product}")
+        
+        # ===== ОПРЕДЕЛЕНИЕ МАТЕРИАЛА =====
+        detected_material = extract_material_from_message(message)
+        if detected_material:
+            session['material_interest'] = detected_material
+            print(f"🪵 Определен материал: {detected_material}")
+        
+        # ===== ОПРЕДЕЛЕНИЕ ЦВЕТА =====
+        detected_color = extract_color_from_message(message)
+        if detected_color:
+            session['color_interest'] = detected_color
+            print(f"🎨 Определен цвет: {detected_color}")
+        
+        # ===== ОПРЕДЕЛЕНИЕ ВЫСОТЫ ПРОЕМА =====
+        detected_height = extract_opening_height(message)
+        if detected_height:
+            session['opening_height'] = detected_height
+            print(f"📏 Определена высота: {detected_height}")
+        
+        # ===== AI ДЛЯ ОПРЕДЕЛЕНИЯ ТОВАРА (если не нашли по ключевым словам) =====
+        if api_key and len(message.strip()) > 3 and not session.get('product_interest'):
             try:
-                print(f"🔍 Использую AI для определения процедуры в: '{message[:30]}...'")
+                print(f"🔍 Использую AI для определения товара в: '{message[:30]}...'")
                 
-                # Создаем промпт для определения процедуры
-                procedure_prompt = f"""Определи, о какой косметологической процедуре идет речь в сообщении клиента.
+                # Создаем промпт для определения товара
+                product_prompt = f"""Определи, о каком товаре для лестниц идет речь в сообщении клиента.
                 
 Сообщение: "{message}"
 
 Выбери ОДНУ наиболее подходящую категорию из списка:
-- лазерная эпиляция (удаление волос лазером, эпиляция)
-- чистка лица (чистка, пилинг, акне, поры)
-- ботулотоксин (ботокс, морщины, уколы от морщин)
-- лифтинг (подтяжка, смас, морфиус, ультера)
-- биоревитализация (увлажнение, гиалуроновая кислота)
-- капельницы (инфузии, витамины, детокс)
-- фотоомоложение (пигментные пятна, веснушки, люмекка)
-- мезотерапия (инъекции, уколы для кожи)
-- перманентный макияж (татуаж, брови, губы)
-- удаление тату (удаление татуировок, татуажа)
-- прокол ушей (пирсинг, сережки)
+- престиж (модульная лестница, шаг 225 мм, классическая)
+- престиж комфорт (улучшенная версия, шаг 190 мм)
+- престиж мини (компактная, гусиный шаг)
+- элегант (изящная лестница, шаг 230 мм)
+- элегант комфорт (улучшенная, шаг 190 мм)
+- каркас (металлическая основа для самостоятельной отделки)
+- ступени (деревянные ступени, хвоя, бук)
+- поручни (перила, балясины, ограждения)
+- комплектующие (модули, подпорки, фланцы, крепеж)
 - другое (если не подходит ни одна категория)
 
 Верни ТОЛЬКО название категории из списка выше, ничего больше."""
@@ -188,83 +290,26 @@ async def extract_contacts_from_message_ai(message: str, session: Dict[str, Any]
                 # Используем тот же AI, что и для имени
                 from chatbot_logic import extract_name_with_ai
                 
-                detected_procedure = await asyncio.to_thread(
-                    extract_name_with_ai,  # Переиспользуем функцию, но с другим промптом
+                detected_product_ai = await asyncio.to_thread(
+                    extract_name_with_ai,
                     api_key,
-                    procedure_prompt
+                    product_prompt
                 )
                 
-                # Проверяем, что полученный результат - допустимая процедура
-                valid_procedures = [
-                    'лазерная эпиляция', 'чистка лица', 'ботулотоксин', 
-                    'лифтинг', 'биоревитализация', 'капельницы', 
-                    'фотоомоложение', 'мезотерапия', 'перманентный макияж',
-                    'удаление тату', 'прокол ушей'
+                # Проверяем, что полученный результат - допустимый товар
+                valid_products = [
+                    'престиж', 'престиж комфорт', 'престиж мини', 
+                    'элегант', 'элегант комфорт', 'каркас',
+                    'ступени', 'поручни', 'комплектующие'
                 ]
                 
-                if detected_procedure and detected_procedure.lower() in [p.lower() for p in valid_procedures]:
-                    # Находим правильное название с учетом регистра
-                    for valid_proc in valid_procedures:
-                        if valid_proc.lower() == detected_procedure.lower():
-                            session['last_procedure'] = valid_proc
-                            print(f"✅ AI определил процедуру: {session['last_procedure']}")
-                            break
-                elif detected_procedure and detected_procedure.lower() != 'другое':
-                    # Если AI вернул что-то другое, но похожее на процедуру
-                    print(f"🤔 AI вернул: {detected_procedure}, ищем совпадения...")
-                    
-                    # Ищем частичное совпадение
-                    for valid_proc in valid_procedures:
-                        if any(word in detected_procedure.lower() for word in valid_proc.lower().split()):
-                            session['last_procedure'] = valid_proc
-                            print(f"✅ Найдено частичное совпадение: {session['last_procedure']}")
-                            break
+                if detected_product_ai and detected_product_ai.lower() in valid_products:
+                    session['product_interest'] = detected_product_ai.lower()
+                    session['product_mentioned'] = True
+                    print(f"✅ AI определил товар: {session['product_interest']}")
                             
             except Exception as e:
-                print(f"⚠️ Ошибка AI при определении процедуры: {e}")
-                
-                # Fallback: используем ключевые слова если AI не сработал
-                procedure_keywords = {
-                    'лазерная эпиляция': ['эпиляция', 'лазер', 'удаление волос', 'бикини', 'подмышки', 'ноги', 'александрит'],
-                    'чистка лица': ['чистка', 'пилинг', 'акне', 'поры'],
-                    'ботулотоксин': ['ботокс', 'ботулин', 'морщины'],
-                    'лифтинг': ['лифтинг', 'подтяжка', 'смас', 'морфиус'],
-                    'биоревитализация': ['биоревитализация', 'гиалуроновая'],
-                    'капельницы': ['капельниц', 'детокс', 'витамин'],
-                    'фотоомоложение': ['пигмент', 'пятн', 'веснушк', 'люмекка'],
-                    'мезотерапия': ['мезотерапия', 'инъекци', 'укол'],
-                    'перманентный макияж': ['перманент', 'татуаж', 'брови', 'губы'],
-                    'удаление тату': ['тату', 'татуировк'],
-                    'прокол ушей': ['прокол', 'ухо', 'уши']
-                }
-                
-                for procedure_type, keywords in procedure_keywords.items():
-                    if any(keyword in message_lower for keyword in keywords):
-                        session['last_procedure'] = procedure_type
-                        print(f"📋 Fallback: определена процедура по ключевым словам: {procedure_type}")
-                        break
-        
-        # ===== ОПРЕДЕЛЕНИЕ ПРОЦЕДУРЫ ПО КЛЮЧЕВЫМ СЛОВАМ (если AI не использовался) =====
-        elif not api_key and not session.get('last_procedure'):
-            procedure_keywords = {
-                'лазерная эпиляция': ['эпиляция', 'лазер', 'удаление волос', 'бикини', 'подмышки', 'ноги', 'александрит'],
-                'чистка лица': ['чистка', 'пилинг', 'акне', 'поры'],
-                'ботулотоксин': ['ботокс', 'ботулин', 'морщины'],
-                'лифтинг': ['лифтинг', 'подтяжка', 'смас', 'морфиус'],
-                'биоревитализация': ['биоревитализация', 'гиалуроновая'],
-                'капельницы': ['капельниц', 'детокс', 'витамин'],
-                'фотоомоложение': ['пигмент', 'пятн', 'веснушк', 'люмекка'],
-                'мезотерапия': ['мезотерапия', 'инъекци', 'укол'],
-                'перманентный макияж': ['перманент', 'татуаж', 'брови', 'губы'],
-                'удаление тату': ['тату', 'татуировк'],
-                'прокол ушей': ['прокол', 'ухо', 'уши']
-            }
-            
-            for procedure_type, keywords in procedure_keywords.items():
-                if any(keyword in message_lower for keyword in keywords):
-                    session['last_procedure'] = procedure_type
-                    print(f"📋 Определена процедура по ключевым словам: {procedure_type}")
-                    break
+                print(f"⚠️ Ошибка AI при определении товара: {e}")
                 
     except Exception as e:
         print(f"❌ Ошибка в extract_contacts_from_message_ai: {e}")
@@ -299,7 +344,7 @@ async def handle_telegram_update(update: Dict[str, Any]):
             username = message['from'].get('first_name', 'Пользователь')
             is_business = False
         
-        # Бизнес-сообщение (личка @gladisSochi)
+        # Бизнес-сообщение (личка @superlestnica_bot)
         elif 'business_message' in update:
             message = update['business_message']
             chat_id = message['chat']['id']
@@ -316,7 +361,7 @@ async def handle_telegram_update(update: Dict[str, Any]):
             return
         
         print(f"\n📱 ВХОДЯЩЕЕ СООБЩЕНИЕ В TELEGRAM")
-        print(f"   Тип: {'Бизнес (личка @gladisSochi)' if is_business else 'Личка боту'}")
+        print(f"   Тип: {'Бизнес (личка @superlestnica_bot)' if is_business else 'Личка боту'}")
         print(f"   От: {username} (ID: {user_id})")
         print(f"   Текст: {text[:50]}..." if len(text) > 50 else f"   Текст: {text}")
         
@@ -329,19 +374,23 @@ async def handle_telegram_update(update: Dict[str, Any]):
                 'phone': None,
                 'text_parts': [],
                 'message_count': 0,
-                'last_procedure': None,
+                'product_interest': None,
+                'material_interest': None,
+                'color_interest': None,
+                'opening_height': None,
                 'telegram_chat_id': chat_id,
                 'telegram_user_id': user_id,
                 'is_business': is_business,
                 'telegram_sent': False,
-                'incomplete_sent': False
+                'incomplete_sent': False,
+                'product_mentioned': False
             }
         
         session = telegram_sessions[session_key]
         session['text_parts'].append(text)
         session['message_count'] += 1
         
-        # Извлекаем контакты и процедуру с помощью AI
+        # Извлекаем контакты и товар с помощью AI
         api_key = os.getenv("REPLICATE_API_TOKEN")
         await extract_contacts_from_message_ai(text, session, api_key)
         
@@ -349,13 +398,13 @@ async def handle_telegram_update(update: Dict[str, Any]):
         from chatbot_logic import generate_bot_reply
         
         if not api_key:
-            reply = "Здравствуйте! Клиника GLADIS. Чем могу помочь?"
+            reply = "Здравствуйте! Меня зовут Алина, я помогу подобрать лестницу для вашего дома. Какая модель вас интересует?"
         else:
             is_first = session['message_count'] == 1
-            has_name = bool(session['name'])
-            has_phone = bool(session['phone'])
-            telegram_sent = False
-            last_procedure = session.get('last_procedure')
+            has_name = bool(session.get('name'))
+            has_phone = bool(session.get('phone'))
+            telegram_sent = bool(session.get('telegram_sent'))
+            product_interest = session.get('product_interest')
             
             # Генерируем ответ (в отдельном потоке)
             reply = await asyncio.to_thread(
@@ -366,32 +415,34 @@ async def handle_telegram_update(update: Dict[str, Any]):
                 has_name,
                 has_phone,
                 telegram_sent,
-                last_procedure
+                product_interest
             )
         
         # Отправляем ответ
         await send_telegram_reply(chat_id, reply)
         
         # Проверяем, нужно ли отправить заявку
-        if session['name'] and session['phone'] and not session.get('telegram_sent', False):
+        if session.get('name') and session.get('phone') and not session.get('telegram_sent', False):
             message_lower = text.lower()
             explicit_intent = any(word in message_lower for word in [
-                'запис', 'хочу', 'нужно', 'можно', 'готов', 'давайте', 
-                'интересует', 'завтра', 'сегодня', 'после'
+                'заказ', 'хочу', 'нужно', 'можно', 'готов', 'давайте', 
+                'рассчита', 'сколько стоит', 'цена', 'купить', 'оформить'
             ])
             
-            procedure_mentioned = session.get('last_procedure') is not None
+            product_mentioned = session.get('product_mentioned', False) or session.get('opening_height') is not None
             
-            if explicit_intent or procedure_mentioned:
+            if explicit_intent or product_mentioned:
                 from telegram_utils import send_complete_application_to_telegram
                 
                 full_conversation = "\n".join(session['text_parts'])
-                source = "Telegram (личка @gladisSochi)" if is_business else "Telegram (личка боту)"
+                source = "Telegram (бизнес @superlestnica_bot)" if is_business else "Telegram (личка боту)"
                 
                 session_with_source = session.copy()
                 session_with_source['source'] = source
-                if session.get('last_procedure'):
-                    session_with_source['procedure_type'] = session['last_procedure']
+                if session.get('product_interest'):
+                    session_with_source['product_type'] = session['product_interest']
+                if session.get('opening_height'):
+                    session_with_source['opening_params'] = f"Высота проема: {session['opening_height']}"
                 
                 await asyncio.to_thread(
                     send_complete_application_to_telegram,
@@ -402,10 +453,11 @@ async def handle_telegram_update(update: Dict[str, Any]):
                 print(f"✅ Заявка из Telegram отправлена в группу")
         
         print(f"📊 СОСТОЯНИЕ TELEGRAM СЕССИИ:")
-        print(f"   👤 Имя: {'✅ ' + session['name'] if session['name'] else '❌ Нет'}")
-        print(f"   📞 Телефон: {'✅ ' + str(session['phone']) if session['phone'] else '❌ Нет'}")
+        print(f"   👤 Имя: {'✅ ' + session['name'] if session.get('name') else '❌ Нет'}")
+        print(f"   📞 Телефон: {'✅ ' + str(session['phone']) if session.get('phone') else '❌ Нет'}")
         print(f"   📨 Отправлено в группу: {'✅' if session.get('telegram_sent') else '❌'}")
-        print(f"   💉 Процедура: {session.get('last_procedure', '❌ Не определена')}")
+        print(f"   🪜 Модель: {session.get('product_interest', '❌ Не определена')}")
+        print(f"   📏 Высота проема: {session.get('opening_height', '❌ Не указана')}")
         print(f"   🤖 Ответ: {reply[:100]}..." if len(reply) > 100 else f"   🤖 Ответ: {reply}")
         
     except Exception as e:
@@ -453,10 +505,12 @@ async def telegram_polling():
         print("❌ TELEGRAM_BOT_TOKEN не настроен, polling отключен")
         return
     
+    bot_username = os.getenv("TELEGRAM_BOT_TOKEN", "").split(':')[0] if ':' in os.getenv("TELEGRAM_BOT_TOKEN", "") else "superlestnica_bot"
+    
     print("🔄 Запуск Telegram polling...")
     print("   Будет обрабатывать:")
-    print("   - личные сообщения @" + os.getenv("TELEGRAM_BOT_TOKEN", "").split(':')[0])
-    print("   - бизнес-сообщения @gladisSochi (если бот подключен)")
+    print(f"   - личные сообщения @{bot_username}")
+    print("   - бизнес-сообщения @superlestnica_bot (если бот подключен)")
     
     # Запускаем периодическую очистку сессий
     asyncio.create_task(periodic_cleanup())
