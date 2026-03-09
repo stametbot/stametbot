@@ -1,381 +1,297 @@
+# chatbot_logic.py
 import replicate
 import re
 import json
 import os
 
-# Загружаем прайс из файла
-def load_procedures_prices():
-    """Загружает полный прайс из файла."""
+# Загружаем каталог товаров из файла
+def load_products_catalog():
+    """Загружает каталог товаров из файла products.json."""
     try:
-        file_path = os.path.join(os.path.dirname(__file__), 'data', 'procedures.json')
+        file_path = os.path.join(os.path.dirname(__file__), 'data', 'products.json')
         with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        print(f"❌ Ошибка загрузки прайса: {e}")
+        print(f"❌ Ошибка загрузки каталога товаров: {e}")
         return {}
 
-def format_procedure_for_prompt(procedure):
-    """Форматирует процедуру для включения в промпт с описаниями аппаратов."""
-    result = f"\n• {procedure.get('name', '')}"
+def format_product_for_prompt(product):
+    """Форматирует товар для включения в промпт."""
+    result = f"\n• {product.get('name', '')}"
     
-    # Добавляем описание если есть
-    if procedure.get('description'):
-        result += f" — {procedure['description']}"
+    # Добавляем описание
+    if product.get('description'):
+        result += f" — {product['description']}"
     
-    # Добавляем аппарат и технологию если есть
-    if procedure.get('apparatus'):
-        result += f"\n  Аппарат: {procedure['apparatus']}"
+    # Добавляем цену
+    if product.get('price'):
+        result += f"\n  Цена: {product['price']} руб."
+    elif product.get('price_from'):
+        result += f"\n  Цена от {product['price_from']} руб. (зависит от высоты и комплектации)"
     
-    if procedure.get('technology'):
-        result += f"\n  Технология: {procedure['technology']}"
-    
-    if procedure.get('country'):
-        result += f"\n  Страна производства: {procedure['country']}"
-    
-    # Добавляем показания если есть
-    if procedure.get('indications'):
-        result += f"\n  Показания: {', '.join(procedure['indications'][:3])}"
-    
-    # Обрабатываем разные типы цен
-    if procedure.get('id') == 'mesotherapy':
-        # Мезотерапия со вложенной структурой
-        result += "\n  Препараты (при оплате 5 сеансов -10%):"
-        for category, preps in procedure.get('procedures', {}).items():
-            result += f"\n    {category}:"
-            for prep, price in preps.items():
-                result += f"\n      - {prep}: {price} руб."
-    
-    elif procedure.get('id') == 'face_cleaning':
-        # Чистки лица и пилинги
-        if procedure.get('peels'):
-            result += "\n  Пилинги:"
-            for peel_name, peel_price in procedure['peels'].items():
-                result += f"\n    - {peel_name}: {peel_price} руб."
-        
-        if procedure.get('advanced_cleaning'):
-            result += "\n  Чистки:"
-            for clean_name, clean_price in procedure['advanced_cleaning'].items():
-                result += f"\n    - {clean_name}: {clean_price} руб."
-    
-    elif procedure.get('id') == 'biorevitalization':
-        # Биоревитализация с препаратами
-        if procedure.get('preparations'):
-            result += "\n  Препараты:"
-            for prep_name, prep_price in list(procedure['preparations'].items())[:5]:  # Первые 5
-                result += f"\n    - {prep_name}: {prep_price} руб."
-    
-    elif procedure.get('id') in ['laser_epilation_innovation', 'laser_epilation_quanta']:
-        # Лазерная эпиляция с комплексами
-        if procedure.get('prices'):
-            result += "\n  Основные зоны:"
-            for zone, price in list(procedure['prices'].items())[:3]:  # Первые 3 зоны
-                result += f"\n    - {zone}: {price} руб."
-        
-        if procedure.get('complexes'):
-            result += "\n  Комплексы:"
-            for complex_name, price in procedure['complexes'].items():
-                result += f"\n    - {complex_name}: {price} руб."
-    
-    elif procedure.get('prices'):
-        # Стандартная структура цен
-        if isinstance(procedure['prices'], dict):
-            result += "\n  Цены:"
-            for item, price in list(procedure['prices'].items())[:5]:  # Первые 5 позиций
-                result += f"\n    - {item}: {price} руб."
-        else:
-            result += f"\n  Цена: {procedure['prices']} руб."
-    
-    # Добавляем курсы если есть
-    if procedure.get('courses'):
-        result += "\n  Курсы:"
-        for course_name, course_price in procedure['courses'].items():
-            result += f"\n    - {course_name}: {course_price} руб."
-    
-    # Добавляем примечание и скидки
-    if procedure.get('note'):
-        result += f"\n  Примечание: {procedure['note']}"
-    
-    if procedure.get('discount'):
-        result += f"\n  Скидка: {procedure['discount']}"
+    # Добавляем характеристики
+    specs = product.get('specs', {})
+    if specs:
+        if specs.get('materials'):
+            result += f"\n  Материалы: {', '.join(specs['materials'])}"
+        if specs.get('colors'):
+            result += f"\n  Цвета: {', '.join(specs['colors'])}"
+        if specs.get('types'):
+            result += f"\n  Типы: {', '.join(specs['types'][:3])}..."
     
     return result
 
 def create_system_prompt():
-    """Создает SYSTEM_PROMPT с актуальным прайсом и описаниями аппаратов."""
-    procedures_data = load_procedures_prices()
+    """Создает SYSTEM_PROMPT с актуальным каталогом товаров."""
+    products_data = load_products_catalog()
+    products = products_data.get('products', [])
     
     base_prompt = """
-Ты — Александра, менеджер клиники эстетической медицины GLADIS в Сочи.
+Ты — Алина, менеджер компании по производству лестниц.
 
 ТВОЙ СТИЛЬ ОБЩЕНИЯ:
-- Дружелюбная, профессиональная, эксперт по всем процедурам клиники
-- ОТВЕЧАЙ НА ВСЕ ВОПРОСЫ о процедурах, используя прайс ниже
-- Если спрашивают о процедуре — расскажи что это, зачем делают и УКАЖИ ЦЕНУ из прайса
-- ОПИСЫВАЙ АППАРАТЫ когда спрашивают про оборудование или технологию
-- Если хотят записаться — попроси имя и телефон
-- ИСПОЛЬЗУЙ ПРАЙС НИЖЕ для точных цен и информации
-- УЧИТЫВАЙ КОНТЕКСТ предыдущих сообщений о процедурах
+- Дружелюбная, профессиональная, эксперт по всем видам лестниц и комплектующим
+- ОТВЕЧАЙ НА ВСЕ ВОПРОСЫ о лестницах, используя каталог товаров ниже
+- Если спрашивают о конкретной модели — расскажи особенности и УКАЖИ ЦЕНУ из каталога
+- ОПИСЫВАЙ ХАРАКТЕРИСТИКИ: материалы (хвоя/бук), цвета RAL, типы (прямая/поворотная)
+- Если хотят заказать или рассчитать стоимость — попроси параметры проема и контакты
+- ИСПОЛЬЗУЙ КАТАЛОГ НИЖЕ для точных цен и информации
 
 ВАЖНЫЕ ПРАВИЛА:
-1. НИКОГДА не говори "у нас нет такой процедуры"! ВСЕ процедуры из списка ниже доступны.
-2. Если клиент спрашивает общую категорию (например "пилинг") — перечисли ВСЕ варианты из этой категории с ценами.
-3. Если спрашивают конкретную процедуру — найди ее в списке и дай точную цену.
+1. НИКОГДА не говори "у нас нет такой лестницы"! ВСЕ товары из каталога ниже доступны.
+2. Если клиент спрашивает общую категорию (например "лестница престиж") — перечисли ВСЕ варианты из этой категории с ценами.
+3. Если спрашивают конкретную модель — найди ее в каталоге и дай точную цену.
 4. Представляйся только при первом сообщении.
-5. Контакты добавляй только когда клиент хочет записаться.
-6. При вопросах об аппаратах — описывай оборудование и его преимущества.
-7. При вопросах о пигментации — рекомендуй фотоомоложение Lumecca как лучший способ.
-8. Если клиент хочет записаться, но не указал процедуру — УТОЧНИ какую процедуру он хочет, особенно если ранее обсуждалась какая-то процедура.
+5. Контакты добавляй только когда клиент хочет заказать или уточнить расчет.
+6. При вопросах о материалах — объясни разницу между хвоей и буком.
+7. При вопросах о типах — объясни особенности прямых, поворотных, разворотных лестниц.
+8. Если клиент хочет заказать, но не указал параметры — ПОПРОСИ высоту проема (от пола до пола).
 
-ВАЖНО ПРО АППАРАТЫ:
-- Лазерная эпиляция: Innovation (гибридный, Россия) и Quanta System (александритовый, Италия)
-- Фотоомоложение: Lumecca (США) — лучший для пигментации
-- SMAS-лифтинг: Ulthera 3-го поколения
-- Микроигольчатый RF: Morpheus
-- ФДТ: Revixan Quattro
+ВАЖНО ПРО СЕРИИ:
+- Престиж: шаг 225 мм, надежная классическая модель
+- Престиж Комфорт: шаг 190 мм, более комфортный подъем
+- Престиж Мини: ступени "гусиный шаг", компактная
+- Элегант: шаг 230 мм, легкий изящный дизайн
+- Элегант Комфорт: шаг 190 мм, изящная и комфортная
 
-КОНТАКТЫ КЛИНИКИ (добавляй только когда нужно):
-📞 Телефон: 8-928-458-32-88
-📍 Адреса:
-   • Сочи: ул. Воровского, 22
-   • Адлер: ул. Кирова, д. 26а
-⏰ Работаем ежедневно с 10:00 до 20:00
+ЦВЕТА RAL:
+• RAL 1015 (слоновая кость)
+• RAL 9005 (черный матовый)
+• RAL 9006 (алюминиевый металлик)
 
-ВАЖНО: Рассрочку и кредит НЕ предоставляем!
+КОНТАКТЫ КОМПАНИИ (добавляй только когда нужно):
+📞 Телефон: 8-9XX-XXX-XX-XX
+📍 Адрес: Московская область, г. [Ваш город], ул. [Ваша улица]
+🚚 Доставка по всей России транспортными компаниями
+⏰ Работаем: Пн-Пт 9:00–18:00, Сб-Вс по договоренности
 """
 
-    # Формируем детальный прайс
-    price_section = "\n" + "="*60 + "\n"
-    price_section += "📋 ПОЛНЫЙ ПРАЙС И ОПИСАНИЯ ПРОЦЕДУР GLADIS\n"
-    price_section += "="*60 + "\n\n"
+    # Формируем детальный каталог
+    catalog_section = "\n" + "="*60 + "\n"
+    catalog_section += "📋 ПОЛНЫЙ КАТАЛОГ ЛЕСТНИЦ И КОМПЛЕКТУЮЩИХ\n"
+    catalog_section += "="*60 + "\n\n"
     
-    if procedures_data and 'procedures' in procedures_data:
-        # Группируем процедуры по категориям для удобства
+    if products:
+        # Группируем товары по категориям
         categories = {}
         
-        for procedure in procedures_data['procedures']:
-            category = procedure.get('category', 'другое')
+        for product in products:
+            category = product.get('category', 'другое')
+            subcategory = product.get('subcategory', '')
             
             if category not in categories:
                 categories[category] = []
             
-            categories[category].append(format_procedure_for_prompt(procedure))
+            categories[category].append(format_product_for_prompt(product))
         
         # Категории для отображения
         category_names = {
-            'эпиляция': '🔥 ЛАЗЕРНАЯ ЭПИЛЯЦИЯ',
-            'чистка': '✨ ЧИСТКА ЛИЦА И ПИЛИНГИ',
-            'лифтинг': '🌟 ЛИФТИНГ И ОМОЛОЖЕНИЕ',
-            'омоложение': '💫 АППАРАТНОЕ ОМОЛОЖЕНИЕ',
-            'инъекции': '💉 ИНЪЕКЦИОННАЯ КОСМЕТОЛОГИЯ',
-            'мезотерапия': '💉 МЕЗОТЕРАПИЯ',
-            'брови_ресницы': '👁 БРОВИ И РЕСНИЦЫ',
-            'макияж': '💄 ПЕРМАНЕНТНЫЙ МАКИЯЖ',
-            'удаление': '❌ УДАЛЕНИЕ ТАТУ И ТАТУАЖА',
-            'лечение': '🏥 ЛЕЧЕБНЫЕ ПРОЦЕДУРЫ',
-            'консультация': '👨‍⚕️ ПРИЕМ ВРАЧЕЙ',
-            'уход': '🌸 УХОДОВЫЕ ПРОЦЕДУРЫ',
-            'массаж': '💆 МАССАЖ',
-            'капельницы': '💧 АВТОРСКИЕ КАПЕЛЬНИЦЫ',
-            'солярий': '☀️ СОЛЯРИЙ МЕЗАЗИМ'
+            'Лестницы': '🏠 МОДУЛЬНЫЕ ЛЕСТНИЦЫ',
+            'Каркасы': '🛠️ КАРКАСЫ ДЛЯ ЛЕСТНИЦ',
+            'Комплектующие': '🔧 КОМПЛЕКТУЮЩИЕ'
         }
         
-        for category_ru, procedures_list in categories.items():
+        for category_ru, products_list in categories.items():
             category_display = category_names.get(category_ru, category_ru.upper())
-            price_section += f"\n{category_display}:\n"
-            price_section += "-" * 40 + "\n"
-            for proc_desc in procedures_list:
-                price_section += proc_desc + "\n"
+            catalog_section += f"\n{category_display}:\n"
+            catalog_section += "-" * 40 + "\n"
+            for product_desc in products_list:
+                catalog_section += product_desc + "\n"
     
     else:
-        # Запасной прайс если файл не загрузился
-        price_section += """
-Основные процедуры и цены:
+        # Запасной каталог если файл не загрузился
+        catalog_section += """
+Основные модели и цены:
 
-1. ЛАЗЕРНАЯ ЭПИЛЯЦИЯ:
-   • Innovation (гибридный, Россия): подмышки 1300 руб, тотал бикини 2900 руб
-   • Quanta System (александритовый, Италия): подмышки 1400 руб, тотал бикини 3500 руб
+1. ЛЕСТНИЦА ПРЕСТИЖ:
+   • Прямая: от 74 400 руб
+   • Поворотная: от 85 000 руб
+   • Материалы: хвоя, бук
+   • Цвета: слоновая кость, черный, алюминий
 
-2. ФОТООМОЛОЖЕНИЕ:
-   • Lumecca (США) — лучший для пигментации: лицо 4000 руб
-   • Record 618 Active
+2. ЛЕСТНИЦА ЭЛЕГАНТ:
+   • Прямая: от 87 200 руб
+   • Поворотная: от 95 000 руб
+   • Материалы: хвоя, бук
+   • Цвета: слоновая кость, черный, алюминий
 
-3. КАПЕЛЬНИЦЫ (23 вида):
-   • Детокс восстановление: 5900 руб
-   • Хорошо погуляли: 5500 руб
-   • При оплате 3-х капельниц -10%
+3. СТУПЕНИ:
+   • Прямая (хвоя): 3 500 руб/шт
+   • Прямая (бук): 2 580 руб/шт
+   • Угловая (хвоя): 1 900 руб/шт
 """
     
-    # Информация о клинике
-    if procedures_data and 'clinic_info' in procedures_data:
-        clinic = procedures_data['clinic_info']
-        price_section += "\n" + "="*60 + "\n"
-        price_section += "🏥 ИНФОРМАЦИЯ О КЛИНИКЕ:\n"
-        price_section += "="*60 + "\n"
-        price_section += f"📍 Адрес в Сочи: {clinic.get('address_sochi', 'ул. Воровского, 22')}\n"
-        price_section += f"📍 Адрес в Адлере: {clinic.get('address_adler', 'ул. Кирова 26а')}\n"
-        price_section += f"📞 Телефон: {clinic.get('phone', '8-928-458-32-88')}\n"
-        price_section += f"⏰ Часы работы: {clinic.get('hours', 'Ежедневно 10:00–20:00')}\n"
-        price_section += f"💳 {clinic.get('no_installment', 'Рассрочка и кредитование предоставляются')}\n"
-    
-    full_prompt = base_prompt + price_section
+    full_prompt = base_prompt + catalog_section
     
     return full_prompt
 
-def handle_pigmentation_question(message: str) -> tuple[bool, str]:
-    """Проверяет, спрашивают ли о пигментных пятнах и возвращает ответ."""
+def handle_opening_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли о размере/параметрах проема."""
     message_lower = message.lower()
-    keywords = ["пигмент", "пятн", "веснушк", "пигментац", "темные пятна", "пигменти", "веснушки"]
+    keywords = ["высота", "проем", "размер", "параметр", "габарит", "от пола до пола", "от пола", "до потолка"]
     
     if any(keyword in message_lower for keyword in keywords):
-        procedures_data = load_procedures_prices()
-        
-        # Ищем фотоомоложение
-        for procedure in procedures_data.get('procedures', []):
-            if procedure.get('id') == 'photo_rejuvenation_lumecca':
-                description = procedure.get('description', 'Современный аппарат для удаления пигментных пятен')
-                apparatus = procedure.get('apparatus', 'Lumecca (США)')
-                prices = procedure.get('prices', {})
-                
-                response = f"""Для удаления пигментных пятен рекомендую фотоомоложение на аппарате {apparatus}!
-                
-{description}
-
-Цены:
-- Лицо: {prices.get('лицо', 4000)} руб.
-- Лицо + шея: {prices.get('лицо + шея', 5500)} руб.
-- Кисти рук: {prices.get('кисти рук', 3000)} руб.
-
-{procedure.get('note', 'Лучший способ удаления пигментации. Результат после 1-3 процедур.')}
-
-Также есть курсы со скидкой:
-- 3 процедуры: {procedure.get('courses', {}).get('курс 3 процедуры', 10000)} руб.
-- 5 процедур: {procedure.get('courses', {}).get('курс 5 процедур', 15000)} руб.
-
-Хотите записаться на консультацию?"""
-                
-                return True, response
-        
-        # Если не нашли в данных
-        return True, """Для удаления пигментных пятен лучший способ — фотоомоложение на аппарате Lumecca (США)! 
-Это современный IPL-аппарат, который безопасно и эффективно убирает пигментацию за 1-3 процедуры.
-
-Цены:
-- Лицо: 4000 руб.
-- Лицо + шея: 5500 руб.
-- Курс 3 процедуры: 10000 руб.
-
-Результат виден уже после первой процедуры. Хотите записаться?"""
+        return True, "Для точного расчета стоимости лестницы мне нужна высота от пола первого этажа до пола второго этажа (в миллиметрах). Также, если знаете, укажите длину и ширину проема. Эти параметры помогут подобрать оптимальную конфигурацию."
     
     return False, ""
 
-def handle_apparatus_question_improved(message: str, last_procedure: str = None) -> tuple[bool, str]:
-    """Улучшенная проверка: ТОЛЬКО явные вопросы про аппараты без контекста записи."""
+def handle_material_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли о материалах ступеней."""
     message_lower = message.lower()
+    keywords = ["материал", "дерево", "хвоя", "бук", "сосна", "из чего", "какая древесина"]
     
-    # Если есть контекст процедуры и сообщение похоже на запись - пропускаем
-    if last_procedure and any(word in message_lower for word in ["завтра", "сегодня", "бикини", "подмышки"]):
-        return False, ""
-    
-    # ОЧЕНЬ явные вопросы про аппараты
-    explicit_apparatus_questions = [
-        "что такое инновейшен", "что такое innovation", 
-        "что такое quanta", "что такое кванта",
-        "что такое lumecca", "что такое люмекка",
-        "расскажи про аппарат", "какой аппарат лучше",
-        "чем отличается инновейшен", "какой лазер лучше",
-        "что за аппарат", "какое оборудование",
-        "аппараты", "оборудование", "техника"
-    ]
-    
-    for question in explicit_apparatus_questions:
-        if question in message_lower:
-            # Вместо вызова несуществующей функции, возвращаем ответ напрямую
-            if "innovation" in message_lower or "инновейшен" in message_lower:
-                return True, """🔬 Innovation — это гибридный лазер (диодный + александритовый) российского производства. 
-                
-Преимущества:
-• Подходит для всех фототипов кожи
-• Минимальные болевые ощущения
-• Высокая эффективность на светлых и тонких волосах
+    if any(keyword in message_lower for keyword in keywords):
+        response = """Мы используем два вида древесины для ступеней:
 
-Цены:
-• Подмышки: 1300 руб.
-• Тотал бикини: 2900 руб.
-• Ноги полностью: 4500 руб.
+🌲 ХВОЯ (сосна):
+• Более доступная цена
+• Светлый оттенок
+• Мягкая древесина, легко поддается обработке
+• Требует более бережного ухода
 
-Хотите записаться на консультацию?"""
-            
-            elif "quanta" in message_lower or "кванта" in message_lower:
-                return True, """🔬 Quanta System — александритовый лазер итальянского производства. 
-                
-Преимущества:
-• Лучший результат на смуглой коже
-• Высокая скорость обработки
-• Эффективен на темных и грубых волосах
+🌳 БУК:
+• Плотная, износостойкая древесина
+• Красивая текстура
+• Дольше служит
+• Выше стоимость
 
-Цены:
-• Подмышки: 1400 руб.
-• Тотал бикини: 3500 руб.
-• Ноги полностью: 5800 руб.
-
-Хотите записаться?"""
-            
-            elif "lumecca" in message_lower or "люмекка" in message_lower:
-                return True, """✨ Lumecca (США) — современный аппарат для интенсивного импульсного света (IPL).
-                
-Лучший способ для:
-• Удаления пигментных пятен
-• Удаления сосудистых сеточек
-• Омоложения кожи
-
-Цены:
-• Лицо: 4000 руб.
-• Лицо + шея: 5500 руб.
-• Курс 3 процедуры: 10000 руб.
-
-Хотите записаться?"""
-            
-            else:
-                return True, """В клинике GLADIS используется современное оборудование:
-
-🔬 Лазерная эпиляция:
-• Innovation (гибридный, Россия)
-• Quanta System (александритовый, Италия)
-
-✨ Фотоомоложение:
-• Lumecca (США) — лучший для пигментации
-
-⚡ Лифтинг:
-• Morpheus (микроигольчатый RF)
-• Ulthera (SMAS-лифтинг)
-
-💡 Фотодинамическая терапия:
-• Revixan Quattro
-
-Хотите подробнее узнать о какой-то процедуре или записаться?"""
+Оба варианта экологичны и прекрасно подходят для лестниц. Какой вас интересует?"""
+        return True, response
     
     return False, ""
 
-def detect_application_intent_with_ai(api_key: str, conversation_history: str, current_message: str) -> bool:
+def handle_color_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли о цветах."""
+    message_lower = message.lower()
+    keywords = ["цвет", "ral", "краска", "покраск", "оттенок", "палитр"]
+    
+    if any(keyword in message_lower for keyword in keywords):
+        response = """Лестницы и комплектующие доступны в четырех цветах RAL:
+
+• RAL 1015 (слоновая кость) — теплый светлый оттенок
+• RAL 9005 (черный матовый) — глубокий черный цвет
+• RAL 9006 (алюминиевый металлик) — серебристый с блеском
+
+Какой цвет вас интересует?"""
+        return True, response
+    
+    return False, ""
+
+def handle_installation_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли о монтаже."""
+    message_lower = message.lower()
+    keywords = ["монтаж", "установк", "сборк", "собрать", "поставить", "кто устанавливает"]
+    
+    if any(keyword in message_lower for keyword in keywords):
+        response = """По монтажу лестниц:
+
+🔨 Вы можете собрать лестницу самостоятельно — модульные конструкции спроектированы так, чтобы сборка была интуитивно понятной. В комплекте идет инструкция.
+
+👷 Если нужна помощь профессиональных монтажников, мы можем порекомендовать проверенных специалистов в вашем регионе.
+
+💡 Также возможен выезд нашей бригады (стоимость рассчитывается индивидуально, зависит от удаленности объекта).
+
+Вам нужна помощь со сборкой?"""
+        return True, response
+    
+    return False, ""
+
+def handle_delivery_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли о доставке."""
+    message_lower = message.lower()
+    keywords = ["доставк", "транспорт", "отправк", "перевозк", "как получить", "везете"]
+    
+    if any(keyword in message_lower for keyword in keywords):
+        response = """🚚 Доставка осуществляется по всей России через транспортные компании (Деловые Линии, ПЭК, СДЭК, Байкал Сервис и др.).
+
+Стоимость доставки рассчитывается индивидуально, исходя из:
+• Габаритов груза
+• Удаленности вашего региона
+• Тарифов выбранной ТК
+
+Отправляем в день готовности заказа. После отгрузки вы получите трек-номер для отслеживания.
+
+Рассчитать примерную стоимость доставки в ваш город?"""
+        return True, response
+    
+    return False, ""
+
+def handle_payment_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли об оплате."""
+    message_lower = message.lower()
+    keywords = ["оплат", "рассрочк", "кредит", "как оплатить", "предоплат", "расчет"]
+    
+    if any(keyword in message_lower for keyword in keywords):
+        response = """💳 Условия оплаты:
+
+• Работаем по 100% предоплате
+• Доступны наличный и безналичный расчет
+• Для юридических лиц выставляем счет с НДС
+
+Рассрочку и кредит, к сожалению, не предоставляем. Оплата производится полностью при заказе."""
+        return True, response
+    
+    return False, ""
+
+def handle_timing_question(message: str) -> tuple[bool, str]:
+    """Проверяет, спрашивают ли о сроках изготовления."""
+    message_lower = message.lower()
+    keywords = ["срок", "изготовлени", "производств", "когда будет", "через сколько", "время"]
+    
+    if any(keyword in message_lower for keyword in keywords):
+        response = """⏱️ Сроки изготовления:
+
+• Прямые лестницы: 5-7 рабочих дней
+• Поворотные/разворотные конфигурации: 10-15 рабочих дней
+• Каркасы: 7-10 рабочих дней
+
+Срок зависит от сложности конструкции и текущей загруженности производства. Точный срок скажет менеджер после согласования проекта.
+
+Можете оставить заявку для уточнения по вашей конфигурации?"""
+        return True, response
+    
+    return False, ""
+
+def detect_order_intent_with_ai(api_key: str, conversation_history: str, current_message: str) -> bool:
     """
-    Использует AI для определения, хочет ли клиент записаться на процедуру.
-    Возвращает True если клиент хочет записаться.
+    Использует AI для определения, хочет ли клиент заказать или рассчитать стоимость.
+    Возвращает True если клиент хочет заказать.
     """
     try:
-        prompt = f"""Проанализируй диалог и определи, хочет ли клиент записаться на процедуру в клинике косметологии.
+        prompt = f"""Проанализируй диалог и определи, хочет ли клиент заказать лестницу или рассчитать стоимость.
 
 ПРАВИЛА АНАЛИЗА:
-1. Клиент ХОЧЕТ записаться если:
-   - Явно говорит "хочу записаться", "запишите меня", "запишите на"
-   - Просит записать на конкретную дату/время
-   - Дает свое имя и телефон после обсуждения процедуры
-   - Проходит конкретную процедуру (эпиляция бикини, чистка лица и т.д.)
-   - Спрашивает о записи и предоставляет контакты
+1. Клиент ХОЧЕТ заказать если:
+   - Явно говорит "хочу заказать", "сделайте заказ", "оформите"
+   - Просит рассчитать стоимость для своих параметров
+   - Дает свое имя и телефон после обсуждения модели
+   - Указывает высоту проема или другие параметры для расчета
+   - Спрашивает "сколько будет стоить для моих размеров"
 
-2. Клиент НЕ хочет записаться если:
-   - Только спрашивает информацию
-   - Просто интересуется без контактов
-   - Обсуждает в общем без конкретных планов
+2. Клиент НЕ хочет заказывать если:
+   - Только спрашивает информацию о моделях
+   - Просто интересуется без конкретных параметров
+   - Обсуждает в общем без планов покупки
 
 ИСТОРИЯ ДИАЛОГА:
 {conversation_history}
@@ -383,7 +299,7 @@ def detect_application_intent_with_ai(api_key: str, conversation_history: str, c
 ПОСЛЕДНЕЕ СООБЩЕНИЕ КЛИЕНТА:
 "{current_message}"
 
-ВОПРОС: Клиент хочет записаться на процедуру? 
+ВОПРОС: Клиент хочет заказать или рассчитать стоимость? 
 
 ОТВЕТ (ТОЛЬКО "ДА" или "НЕТ"):"""
 
@@ -415,7 +331,6 @@ def detect_application_intent_with_ai(api_key: str, conversation_history: str, c
         result = result.strip().lower()
         print(f"🤖 AI анализ намерения: '{result}'")
         
-        # Проверяем ответ
         if "да" in result:
             return True
         elif "нет" in result:
@@ -423,14 +338,13 @@ def detect_application_intent_with_ai(api_key: str, conversation_history: str, c
         else:
             # Если AI дал неоднозначный ответ, проверяем по ключевым словам
             current_lower = current_message.lower()
-            action_words = ["запис", "хочу", "нужно", "можно", "готов", "давайте"]
+            action_words = ["заказ", "хочу", "нужно", "можно", "готов", "давайте", "рассчитай", "сколько стоит", "цена"]
             return any(word in current_lower for word in action_words)
             
     except Exception as e:
         print(f"❌ Ошибка AI при анализе намерения: {str(e)}")
-        # Fallback: если в сообщении есть слова о действии
         current_lower = current_message.lower()
-        action_words = ["запис", "хочу", "нужно", "можно", "готов", "давайте"]
+        action_words = ["заказ", "хочу", "нужно", "можно", "готов", "давайте", "рассчитай", "сколько стоит", "цена"]
         return any(word in current_lower for word in action_words)
 
 def is_simple_greeting(message: str) -> bool:
@@ -444,7 +358,6 @@ def is_simple_greeting(message: str) -> bool:
         "здравия", "приветик", "доброго"
     ]
     
-    # Если сообщение состоит только из приветствия
     for greeting in greetings:
         if greeting in message_lower:
             clean_msg = message_lower.replace(greeting, "").strip()
@@ -453,32 +366,26 @@ def is_simple_greeting(message: str) -> bool:
     
     return False
 
-def is_registration_request(message: str) -> bool:
-    """Определяет, хочет ли клиент записаться (улучшенная версия)."""
+def is_order_request(message: str) -> bool:
+    """Определяет, хочет ли клиент заказать (улучшенная версия)."""
     message_lower = message.lower()
     
     # Явные фразы
-    if "запис" in message_lower:
-        if any(word in message_lower for word in ["хочу", "можно", "нужно", "готов", "давайте"]):
-            return True
-        if any(word in message_lower for word in ["завтра", "сегодня", "после"]):
+    if "заказ" in message_lower:
+        if any(word in message_lower for word in ["хочу", "можно", "нужно", "готов", "давайте", "оформи"]):
             return True
     
-    # Указание времени + зоны процедуры
-    if any(word in message_lower for word in ["завтра", "сегодня", "после"]):
-        if any(word in message_lower for word in ["бикини", "подмышки", "ноги", "голени", "бедра"]):
+    # Расчет стоимости
+    if "рассчита" in message_lower or "сколько стоит" in message_lower or "цена" in message_lower:
+        if any(word in message_lower for word in ["лестниц", "престиж", "элегант", "модел"]):
             return True
     
-    # Конкретная процедура + время
-    procedure_keywords = ["эпиляция", "чистка", "ботокс", "пилинг", "лифтинг"]
-    time_keywords = ["завтра", "сегодня", "в ", "во ", "после"]
-    
-    if any(proc in message_lower for proc in procedure_keywords):
-        if any(time in message_lower for time in time_keywords):
-            return True
+    # Указание параметров
+    if "высот" in message_lower and ("мм" in message_lower or "метр" in message_lower):
+        return True
     
     return False
-    
+
 def should_add_contacts_to_reply(user_message: str, bot_reply: str, is_first_message: bool = False) -> bool:
     """
     Определяет, нужно ли добавлять контакты к ответу.
@@ -487,27 +394,26 @@ def should_add_contacts_to_reply(user_message: str, bot_reply: str, is_first_mes
     reply_lower = bot_reply.lower()
     
     # Всегда добавляем контакты если:
-    # 1. Клиент явно хочет записаться
-    if is_registration_request(user_message):
+    # 1. Клиент явно хочет заказать
+    if is_order_request(user_message):
         return True
     
     # 2. Клиент спрашивает контакты
     if any(word in user_lower for word in ["телефон", "адрес", "контакт", "позвонить", "номер", "как связаться"]):
         return True
     
-    # 3. В ответе уже просят контакты (явно)
+    # 3. В ответе уже просят контакты
     if any(phrase in reply_lower for phrase in [
-        "для записи мне нужно ваше имя и телефон",
-        "укажите ваше имя и телефон для записи",
+        "укажите ваше имя и телефон",
         "назовите имя и телефон для связи",
-        "мне нужны ваши контакты для записи"
+        "мне нужны ваши контакты",
+        "для расчета нужны ваши контакты"
     ]):
         return True
     
-    # 4. Это завершение консультации (длинный ответ) И клиент проявлял интерес
+    # 4. Это завершение консультации И клиент проявлял интерес
     if len(bot_reply) > 300 and ("руб" in reply_lower or "стоимость" in reply_lower):
-        # Проверяем, было ли в диалоге упоминание о записи
-        if "запис" in user_lower:
+        if "заказ" in user_lower or "хочу" in user_lower:
             return True
     
     # Не добавляем контакты если:
@@ -518,52 +424,68 @@ def should_add_contacts_to_reply(user_message: str, bot_reply: str, is_first_mes
     # 2. Это простой информационный вопрос
     if (len(bot_reply) < 200 and 
         "?" in user_message and 
-        not is_registration_request(user_message)):
+        not is_order_request(user_message)):
         return False
     
     return False
 
 def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = False, 
                       has_name: bool = False, has_phone: bool = False,
-                      telegram_sent: bool = False, last_procedure: str = None) -> str:
-    """Генерация ответа бота через Replicate API с максимальным использованием AI."""
+                      telegram_sent: bool = False, last_product: str = None) -> str:
+    """Генерация ответа бота через Replicate API."""
     try:
         print(f"\n🤖 Генерация ответа AI")
         print(f"   Сообщение: '{message}'")
         print(f"   Первое в сессии: {is_first_in_session}")
         print(f"   Есть имя: {has_name}, Есть телефон: {has_phone}")
         print(f"   Telegram отправлен: {telegram_sent}")
-        print(f"   Контекст процедуры: {last_procedure or 'Нет контекста'}")
+        print(f"   Контекст товара: {last_product or 'Нет контекста'}")
         
         message_lower = message.lower()
         
-        # 1. ОЧЕНЬ простые случаи обрабатываем сразу (оптимизация)
+        # 1. ОЧЕНЬ простые случаи обрабатываем сразу
         if is_simple_greeting(message_lower):
             if is_first_in_session:
-                return "Здравствуйте! Клиника GLADIS, меня зовут Александра. Чем могу вам помочь?"
+                return "Здравствуйте! Меня зовут Алина, я помощник в подборе лестниц. Чем могу вам помочь?"
             else:
-                return "Чем могу вам помочь?"
+                return "Чем могу помочь?"
         
-        # 2. Вопросы про пигментацию (очень специфично)
-        is_pigmentation, pigmentation_response = handle_pigmentation_question(message)
-        if is_pigmentation:
-            print("🎯 Вопрос про пигментацию - использую подготовленный ответ")
-            return pigmentation_response
+        # 2. Специфичные вопросы
+        is_opening, opening_response = handle_opening_question(message)
+        if is_opening:
+            return opening_response
         
-        # 3. Проверяем, явный ли это запрос на запись
-        basic_registration_check = is_registration_request(message)
+        is_material, material_response = handle_material_question(message)
+        if is_material:
+            return material_response
         
-        # 4. Вопросы про аппараты - ТОЛЬКО если это точно не запрос и явный вопрос
-        if not basic_registration_check:
-            is_apparatus, apparatus_response = handle_apparatus_question_improved(message, last_procedure)
-            if is_apparatus:
-                print("⚙️ Явный вопрос про аппарат - использую подготовленный ответ")
-                return apparatus_response
+        is_color, color_response = handle_color_question(message)
+        if is_color:
+            return color_response
         
-        # 5. ВСЁ ОСТАЛЬНОЕ отдаем AI с полным контекстом
+        is_installation, installation_response = handle_installation_question(message)
+        if is_installation:
+            return installation_response
+        
+        is_delivery, delivery_response = handle_delivery_question(message)
+        if is_delivery:
+            return delivery_response
+        
+        is_payment, payment_response = handle_payment_question(message)
+        if is_payment:
+            return payment_response
+        
+        is_timing, timing_response = handle_timing_question(message)
+        if is_timing:
+            return timing_response
+        
+        # 3. Проверяем, явный ли это запрос на заказ
+        basic_order_check = is_order_request(message)
+        
+        # 4. ВСЁ ОСТАЛЬНОЕ отдаем AI с полным контекстом
         system_prompt = create_system_prompt()
         
-        # Формируем БОГАТЫЙ контекст для AI
+        # Формируем контекст для AI
         context_lines = []
         
         # Информация о сессии
@@ -574,30 +496,27 @@ def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = F
         
         if telegram_sent:
             context_lines.append(f"   • ✅ ЗАЯВКА УЖЕ ОТПРАВЛЕНА МЕНЕДЖЕРУ")
-            context_lines.append(f"   • Клиент продолжает диалог после отправки заявки - отвечай на вопросы как обычно, не предлагай записаться повторно")
+            context_lines.append(f"   • Клиент продолжает диалог после отправки заявки - отвечай на вопросы как обычно, не предлагай оформить заказ повторно")
         else:
             context_lines.append(f"   • 📝 Заявка еще не отправлена")
         
-        # Контекст процедуры
-        if last_procedure:
-            context_lines.append(f"\n📋 ИСТОРИЯ ПРОЦЕДУРЫ:")
-            context_lines.append(f"   • Ранее обсуждалась/интересовались: {last_procedure}")
-            context_lines.append(f"   • Если клиент хочет записаться без уточнений - предполагаем эту процедуру")
+        # Контекст товара
+        if last_product:
+            context_lines.append(f"\n📋 ИСТОРИЯ ТОВАРА:")
+            context_lines.append(f"   • Ранее обсуждалась модель: {last_product}")
         
         # Анализ текущего сообщения
         context_lines.append(f"\n🎯 АНАЛИЗ ТЕКУЩЕГО СООБЩЕНИЯ:")
         context_lines.append(f"   • Сообщение: \"{message}\"")
         
-        # Определяем тип сообщения (для AI)
+        # Определяем тип сообщения
         msg_type = []
-        if basic_registration_check:
-            msg_type.append("запрос на запись")
+        if basic_order_check:
+            msg_type.append("запрос на заказ/расчет")
         if "цена" in message_lower or "стоимость" in message_lower or "сколько" in message_lower:
             msg_type.append("вопрос о цене")
-        if any(word in message_lower for word in ["бикини", "подмышки", "ноги", "лицо", "шея"]):
-            msg_type.append("указана конкретная зона")
-        if "завтра" in message_lower or "сегодня" in message_lower:
-            msg_type.append("указано время")
+        if "высот" in message_lower or "проем" in message_lower:
+            msg_type.append("указаны параметры проема")
         
         if msg_type:
             context_lines.append(f"   • Тип: {', '.join(msg_type)}")
@@ -612,41 +531,41 @@ def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = F
 {context_section}
 ================================================================================
 
-🧠 ТВОЯ ЗАДАЧА КАК АЛЕКСАНДРЫ (менеджер клиники GLADIS):
+🧠 ТВОЯ ЗАДАЧА КАК АЛИНЫ (менеджер компании по лестницам):
 
 1. ПРОАНИЛИЗИРУЙ сообщение клиента и контекст выше
 2. ОПРЕДЕЛИ что хочет клиент:
-   - ✅ ЗАПИСАТЬСЯ на процедуру → действуй по шагу A
-   - 📋 УЗНАТЬ информацию/цену → действуй по шагу B
+   - ✅ ЗАКАЗАТЬ/РАССЧИТАТЬ стоимость → действуй по шагу A
+   - 📋 УЗНАТЬ информацию о моделях/ценах → действуй по шагу B
    - 🔧 УТОЧНИТЬ детали → действуй по шагу C
 
-ШАГ A: ЕСЛИ КЛИЕНТ ХОЧЕТ ЗАПИСАТЬСЯ
-{"1. Клиент явно хочет записаться (есть слова 'записаться', 'завтра' и т.д.)" if basic_registration_check else ""}
-{"2. Используй контекст процедуры если клиент не уточнил: '{last_procedure}'" if last_procedure and not any(word in message_lower for word in ["эпиляция", "чистка", "ботокс"]) else ""}
+ШАГ A: ЕСЛИ КЛИЕНТ ХОЧЕТ ЗАКАЗАТЬ ИЛИ РАССЧИТАТЬ
+{"1. Клиент явно хочет заказать (есть слова 'заказать', 'рассчитать' и т.д.)" if basic_order_check else ""}
+{"2. Используй контекст модели если клиент не уточнил: '{last_product}'" if last_product and not any(word in message_lower for word in ["престиж", "элегант", "мини"]) else ""}
 3. ДЕЙСТВИЯ:
-   • Подтверди процедуру/зону если указаны
-   • Если процедура не ясна - УТОЧНИ ("На какую процедуру хотите записаться?")
-   • ПОПРОСИ контакты: "Укажите ваше имя и телефон для записи"
-   • Если уже есть имя/телефон - подтверди запись
+   • Подтверди модель если указана
+   • Если модель не ясна - УТОЧНИ ("Какую модель лестницы вы рассматриваете?")
+   • ПОПРОСИ параметры: "Для расчета укажите высоту от пола до пола (в мм)"
+   • ПОПРОСИ контакты: "Оставьте ваше имя и телефон для связи"
 
 ШАГ B: ЕСЛИ КЛИЕНТ СПРАШИВАЕТ ИНФОРМАЦИЮ
-1. Дай ПОЛНЫЙ ответ используя прайс ниже
-2. Упомяни аппараты если спрашивают про оборудование
-3. Предложи записаться если уместно
+1. Дай ПОЛНЫЙ ответ используя каталог ниже
+2. Упомяни материалы и цвета если спрашивают
+3. Предложи рассчитать стоимость если уместно
 
 ШАГ C: ЕСЛИ КЛИЕНТ УТОЧНЯЕТ ДЕТАЛИ
-{"1. Клиент уточняет детали процедуры: '{last_procedure}'" if last_procedure else ""}
-1. Ответь на вопрос используя прайс
-2. Помоги определиться
-3. Предложи следующий шаг (запись или дополнительная информация)
+{"1. Клиент уточняет детали модели: '{last_product}'" if last_product else ""}
+1. Ответь на вопрос используя каталог
+2. Помоги определиться с выбором
+3. Предложи следующий шаг (расчет или доп. информация)
 
-{'⚠️ ВАЖНО: Заявка клиента уже отправлена менеджеру! Отвечай на вопросы как обычно, НЕ предлагай записаться повторно.' if telegram_sent else ''}
+{'⚠️ ВАЖНО: Заявка клиента уже отправлена менеджеру! Отвечай на вопросы как обычно, НЕ предлагай оформить заказ повторно.' if telegram_sent else ''}
 
 ================================================================================
 КЛИЕНТ ПИШЕТ: "{message}"
 
-ТВОЙ ОТВЕТ (Александра из GLADIS):
-{"1. Представься: 'Здравствуйте! Клиника GLADIS, меня зовут Александра.'" if is_first_in_session else "1. НЕ представляйся снова"}
+ТВОЙ ОТВЕТ (Алина):
+{"1. Представься: 'Здравствуйте! Меня зовут Алина.'" if is_first_in_session else "1. НЕ представляйся снова"}
 2. Ответь согласно анализу выше
 3. Будь экспертом, но дружелюбной
 4. Используй смайлики если уместно
@@ -685,26 +604,13 @@ def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = F
         
         # Очищаем ответ если нужно
         if not result or len(result) < 10:
-            result = "Извините, не удалось обработать запрос. Пожалуйста, позвоните нам по телефону 8-928-458-32-88 для консультации."
+            result = "Извините, не удалось обработать запрос. Пожалуйста, позвоните нам по телефону 8-9XX-XXX-XX-XX для консультации."
         
-        # Убираем повторные приветствия если не первое сообщение
+        # Убираем повторные приветствия
         if not is_first_in_session:
             result = re.sub(r'^Здравствуйте[!\.]?\s*', '', result)
             result = re.sub(r'^Добрый день[!\.]?\s*', '', result)
-            result = re.sub(r'^Добрый вечер[!\.]?\s*', '', result)
-            result = re.sub(r'^Привет[!\.]?\s*', '', result)
-            result = re.sub(r'^Меня зовут Александра[!\.]?\s*', '', result)
-        
-        # Автокоррекция: если AI забыл попросить контакты при явной записи (только если заявка еще не отправлена)
-        if basic_registration_check and "запис" in message_lower and not telegram_sent:
-            # Проверяем, попросил ли AI контакты
-            has_contacts_request = any(phrase in result.lower() for phrase in [
-                "имя и телефон", "ваше имя", "номер телефона", "контакт", "телефон"
-            ])
-            
-            if not has_contacts_request and "спасибо" not in result.lower():
-                # Добавляем запрос контактов
-                result += "\n\nДля записи укажите, пожалуйста, ваше имя и телефон для связи."
+            result = re.sub(r'^Меня зовут Алина[!\.]?\s*', '', result)
         
         return result
             
@@ -717,19 +623,16 @@ def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = F
         message_lower = message.lower()
         
         if "адрес" in message_lower or "телефон" in message_lower:
-            return "Клиника GLADIS:\n📞 Телефон: 8-928-458-32-88\n📍 Адреса: Сочи, ул. Воровского, 22 и Адлер, ул. Кирова, д. 26а"
-        elif "пигмент" in message_lower or "пятн" in message_lower:
-            return "Для удаления пигментных пятен лучший способ — фотоомоложение на аппарате Lumecca (США)! Цена от 4000 руб. за лицо. Хотите записаться?"
+            return "Наш адрес: Московская область, г. [Ваш город], ул. [Ваша улица]. Телефон: 8-9XX-XXX-XX-XX"
         elif telegram_sent:
-            # Если заявка уже отправлена, но AI упал
-            return "Извините за техническую неполадку. Чем еще могу помочь? Если есть вопросы по процедурам, спрашивайте!"
-        elif "запис" in message_lower:
-            if last_procedure:
-                return f"Для записи на {last_procedure} укажите ваше имя и телефон. Телефон клиники: 8-928-458-32-88"
+            return "Извините за техническую неполадку. Чем еще могу помочь? Если есть вопросы по моделям или ценам, спрашивайте!"
+        elif "заказ" in message_lower or "рассчита" in message_lower:
+            if last_product:
+                return f"Для расчета стоимости {last_product} укажите высоту от пола до пола (в мм) и оставьте ваше имя и телефон для связи."
             else:
-                return "Для записи укажите ваше имя и телефон. Также, пожалуйста, уточните на какую процедуру хотите записаться. Телефон клиники: 8-928-458-32-88"
+                return "Для расчета стоимости укажите, пожалуйста, высоту от пола до пола (в мм) и модель лестницы, которая вас интересует. Также оставьте ваше имя и телефон для связи."
         else:
-            return "Для консультации по процедурам позвоните по телефону 8-928-458-32-88"
+            return "Для консультации по лестницам позвоните по телефону 8-9XX-XXX-XX-XX"
 
 def extract_name_with_ai(api_key: str, message: str) -> str:
     """
@@ -740,15 +643,15 @@ def extract_name_with_ai(api_key: str, message: str) -> str:
 
 ВОТ ПРАВИЛА:
 1. Имя - это личное имя человека (Анна, Иван, Мария, Дмитрий и т.д.)
-2. НЕ имя: названия процедур (ботокс, эпиляция, чистка, пилинг и т.д.)
-3. НЕ имя: общие слова (привет, здравствуйте, хочу, записаться и т.д.)
+2. НЕ имя: названия моделей лестниц (престиж, элегант, мини)
+3. НЕ имя: общие слова (привет, здравствуйте, хочу, заказать и т.д.)
 4. Если сомневаешься - верни "not_found"
 
 Примеры:
-Сообщение: "Меня зовут Анна, хочу на ботокс" → Ответ: "Анна"
-Сообщение: "Хочу записаться на ботокс" → Ответ: "not_found"
+Сообщение: "Меня зовут Анна, хочу заказать лестницу" → Ответ: "Анна"
+Сообщение: "Хочу заказать Престиж" → Ответ: "not_found"
 Сообщение: "Иван, 89161234567" → Ответ: "Иван"
-Сообщение: "Ботокс на губы" → Ответ: "not_found"
+Сообщение: "Сколько стоит Элегант" → Ответ: "not_found"
 
 Сообщение: "{message}"
 
@@ -792,17 +695,14 @@ def extract_name_with_ai(api_key: str, message: str) -> str:
         if not result:
             return None
         
-        # Фильтруем процедуры
-        procedure_keywords = [
-            'ботокс', 'ботулин', 'диспорт', 'релатокс', 'ботулакс',
-            'эпиляция', 'лазерная', 'биоревитализация', 'чистка',
-            'пилинг', 'лифтинг', 'смас', 'морфиус', 'перманентный',
-            'макияж', 'контурная', 'пластика', 'мезотерапия',
-            'коллаген', 'химический', 'ретиноловый', 'карбоновый'
+        # Фильтруем названия моделей
+        model_keywords = [
+            'престиж', 'элегант', 'мини', 'комфорт',
+            'лестниц', 'ступен', 'модуль', 'каркас'
         ]
         
-        if any(proc in result for proc in procedure_keywords):
-            print(f"⚠️ Отфильтровано: '{result}' похоже на процедуру")
+        if any(model in result for model in model_keywords):
+            print(f"⚠️ Отфильтровано: '{result}' похоже на модель лестницы")
             return None
         
         # Проверяем что это похоже на имя
@@ -816,7 +716,6 @@ def extract_name_with_ai(api_key: str, message: str) -> str:
         else:
             result = result.capitalize()
         
-        # Длина имени должна быть разумной
         if len(result) < 2 or len(result) > 30:
             return None
         
@@ -828,36 +727,27 @@ def extract_name_with_ai(api_key: str, message: str) -> str:
 
 def check_interesting_application(text: str):
     """
-    Проверяем, является ли сообщение заявкой на процедуру.
+    Проверяем, является ли сообщение заявкой на заказ/расчет.
     """
     t = text.lower()
     
     # РАСШИРЕННЫЙ СПИСОК КЛЮЧЕВЫХ СЛОВ
-    procedure_keywords = [
-        "записаться", "запись", "записать", "хочу", "можно", "мне нужно",
-        "нужно", "готов", "давайте", "интересует", "интересуюсь", "процедур",
-        "эпиляция", "лазерная", "ботокс", "ботулин", "чистка",
-        "пилинг", "омоложение", "лифтинг", "smas", "морфиус",
-        "биоревитализация", "инъекция", "укол", "гиалуроновая",
-        "консультация", "врач", "косметолог", "прием",
-        "брови", "ресницы", "ламинирование", "наращивание",
-        "тату", "татуировка", "удаление", "перманент",
-        "массаж", "микротоки", "мезотерапия", "роликовый",
-        "коллаген", "химический", "ретиноловый", "карбоновый",
+    order_keywords = [
+        "заказать", "заказ", "оформить", "хочу", "можно", "мне нужно",
+        "нужно", "готов", "давайте", "интересует", "интересуюсь",
+        "престиж", "элегант", "мини", "лестниц", "модель",
         "стоит", "цена", "прайс", "стоимость", "сколько",
-        "бикини", "подмышки", "голени", "бедра", "лицо",
-        "шея", "спина", "живот", "руки", "ноги",
-        "капельниц", "детокс", "витамин", "омоложение",
-        "пигмент", "пятн", "веснушк", "аппарат", "лазер"
+        "высот", "проем", "размер", "параметр", "мм", "метр",
+        "рассчита", "посчита", "подбери", "подбор"
     ]
     
-    contact_keywords = ["имя", "зовут", "телефон", "телефоне", "номер", "позвонить", "мне зовут"]
+    contact_keywords = ["имя", "зовут", "телефон", "телефоне", "номер", "позвонить", "мне зовут", "контакт"]
     
-    has_procedure = any(keyword in t for keyword in procedure_keywords)
+    has_order = any(keyword in t for keyword in order_keywords)
     has_contacts = any(keyword in t for keyword in contact_keywords)
     
     print(f"🔍 Проверка заявки: '{text[:100]}...'")
-    print(f"   Процедурные слова: {has_procedure}")
+    print(f"   Слова заказа: {has_order}")
     print(f"   Контактные слова: {has_contacts}")
     
-    return has_procedure or has_contacts
+    return has_order or has_contacts
