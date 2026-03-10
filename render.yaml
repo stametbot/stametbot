@@ -5,14 +5,12 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 65
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
       - key: REPLICATE_API_TOKEN
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
-        value: "@superlestnica_bot"
+        value: "-5111842910"
       - key: RENDER_EXTERNAL_URL
         sync: false
     healthCheckPath: /health
