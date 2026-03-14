@@ -466,104 +466,99 @@ async def chat_endpoint(request: Request):
         
         product_interest = get_product_interest_from_history(session)
         
-        # ===== ОТПРАВКА В TELEGRAM =====
-telegram_was_sent_now = False
+                # ===== ОТПРАВКА В TELEGRAM =====
+        telegram_was_sent_now = False
 
-if session.get('name') and session.get('phone') and not session.get('telegram_sent', False):
-    print(f"🚨 ПРОВЕРКА ОТПРАВКИ В TELEGRAM:")
-    print(f"   👤 Имя: {session['name']}")
-    print(f"   📞 Телефон: {session['phone']}")
-    
-    # Получаем историю диалога для анализа
-    full_conversation = "\n".join(session.get('text_parts', []))
-    
-    # Используем AI для определения намерения
-    order_intent = False
-    if REPLICATE_API_TOKEN:
-        try:
-            from chatbot_logic import detect_order_intent_with_ai
-            order_intent = detect_order_intent_with_ai(
-                REPLICATE_API_TOKEN, 
-                full_conversation, 
-                user_message
-            )
-            print(f"🤖 AI определил намерение заказа: {order_intent}")
-        except Exception as e:
-            print(f"⚠️ Ошибка AI при анализе намерения: {e}")
-            # Fallback на простую проверку
-            message_lower = user_message.lower()
-            order_intent = any(word in message_lower for word in [
-                'заказ', 'хочу', 'нужно', 'можно', 'готов', 'давайте', 
-                'рассчита', 'сколько стоит', 'цена', 'купить', 'оформить'
-            ])
-    else:
-        # Если AI недоступен, используем простую проверку
-        message_lower = user_message.lower()
-        order_intent = any(word in message_lower for word in [
-            'заказ', 'хочу', 'нужно', 'можно', 'готов', 'давайте', 
-            'рассчита', 'сколько стоит', 'цена', 'купить', 'оформить'
-        ])
-    
-    # Определяем, упоминались ли товары в диалоге
-    product_mentioned = session.get('product_mentioned', False) or session.get('product_interest') is not None
-    
-    # Определяем, указаны ли параметры
-    has_params = session.get('opening_height') is not None
-    
-    # Отправляем заявку если есть намерение И (товар упоминался ИЛИ есть параметры)
-    should_send = order_intent and (product_mentioned or has_params)
-    
-    if should_send:
-        print(f"🚨 ОТПРАВЛЯЕМ ЗАЯВКУ В TELEGRAM!")
-        print(f"   Намерение: {order_intent}")
-        print(f"   Товар упоминался: {product_mentioned}")
-        print(f"   Есть параметры: {has_params}")
-        
-        full_conversation = "\n".join(session.get('text_parts', []))
-        
-        # Сохраняем информацию о товаре для отправки
-        if session.get('product_interest'):
-            session['product_type'] = session['product_interest']
-        
-        # Формируем параметры для отправки
-        params_list = []
-        if session.get('opening_height'):
-            params_list.append(f"Высота: {session['opening_height']}")
-        if session.get('material_interest'):
-            params_list.append(f"Материал: {session['material_interest']}")
-        if session.get('color_interest'):
-            params_list.append(f"Цвет: {session['color_interest']}")
-        if session.get('staircase_type'):
-            params_list.append(f"Тип: {session['staircase_type']}")
-        
-        if params_list:
-            session['product_params'] = "\n".join(params_list)
-        
-        try:
-            success = send_complete_application_to_telegram(session, full_conversation)
+        if session.get('name') and session.get('phone') and not session.get('telegram_sent', False):
+            print(f"🚨 ПРОВЕРКА ОТПРАВКИ В TELEGRAM:")
+            print(f"   👤 Имя: {session['name']}")
+            print(f"   📞 Телефон: {session['phone']}")
             
-            if success:
-                session['telegram_sent'] = True
-                session['stage'] = 'completed'
-                session['contacts_provided'] = True
-                telegram_was_sent_now = True
-                print(f"✅ Заявка отправлена в Telegram")
-                
-                # ===== НОВЫЙ КОД: Отправляем подтверждение клиенту =====
-                if session.get('name'):
-                    bot_reply = f"✅ Спасибо, {session['name']}! Ваша заявка передана менеджеру. С вами свяжутся для уточнения деталей и расчета стоимости.\n\n📞 Телефон компании: +7 (495) 109-33-88"
-                else:
-                    bot_reply = "✅ Спасибо! Ваша заявка передана менеджеру. С вами свяжутся для уточнения деталей и расчета стоимости.\n\n📞 Телефон компании: +7 (495) 109-33-88"
-                # ===== КОНЕЦ НОВОГО КОДА =====
-                
+            # Получаем историю диалога для анализа
+            full_conversation = "\n".join(session.get('text_parts', []))
+            
+            # Используем AI для определения намерения
+            order_intent = False
+            if REPLICATE_API_TOKEN:
+                try:
+                    from chatbot_logic import detect_order_intent_with_ai
+                    order_intent = detect_order_intent_with_ai(
+                        REPLICATE_API_TOKEN, 
+                        full_conversation, 
+                        user_message
+                    )
+                    print(f"🤖 AI определил намерение заказа: {order_intent}")
+                except Exception as e:
+                    print(f"⚠️ Ошибка AI при анализе намерения: {e}")
+                    # Fallback на простую проверку
+                    message_lower = user_message.lower()
+                    order_intent = any(word in message_lower for word in [
+                        'заказ', 'хочу', 'нужно', 'можно', 'готов', 'давайте', 
+                        'рассчита', 'сколько стоит', 'цена', 'купить', 'оформить'
+                    ])
             else:
-                print(f"⚠️ Ошибка отправки в Telegram")
-        except Exception as e:
-            print(f"❌ Исключение при отправке в Telegram: {e}")
-    else:
-        print(f"ℹ️ Контакты есть, но нет явного намерения заказать")
-        print(f"   Намерение: {order_intent}, Товар: {product_mentioned}, Параметры: {has_params}")
-        session['contacts_provided'] = True
+                # Если AI недоступен, используем простую проверку
+                message_lower = user_message.lower()
+                order_intent = any(word in message_lower for word in [
+                    'заказ', 'хочу', 'нужно', 'можно', 'готов', 'давайте', 
+                    'рассчита', 'сколько стоит', 'цена', 'купить', 'оформить'
+                ])
+            
+            # Определяем, упоминались ли товары в диалоге
+            product_mentioned = session.get('product_mentioned', False) or session.get('product_interest') is not None
+            
+            # Определяем, указаны ли параметры
+            has_params = session.get('opening_height') is not None
+            
+            # Отправляем заявку если есть намерение И (товар упоминался ИЛИ есть параметры)
+            should_send = order_intent and (product_mentioned or has_params)
+            
+            if should_send:
+                print(f"🚨 ОТПРАВЛЯЕМ ЗАЯВКУ В TELEGRAM!")
+                print(f"   Намерение: {order_intent}")
+                print(f"   Товар упоминался: {product_mentioned}")
+                print(f"   Есть параметры: {has_params}")
+                
+                full_conversation = "\n".join(session.get('text_parts', []))
+                
+                # Сохраняем информацию о товаре для отправки
+                if session.get('product_interest'):
+                    session['product_type'] = session['product_interest']
+                
+                # Формируем параметры для отправки
+                params_list = []
+                if session.get('opening_height'):
+                    params_list.append(f"Высота: {session['opening_height']}")
+                if session.get('material_interest'):
+                    params_list.append(f"Материал: {session['material_interest']}")
+                if session.get('color_interest'):
+                    params_list.append(f"Цвет: {session['color_interest']}")
+                if session.get('staircase_type'):
+                    params_list.append(f"Тип: {session['staircase_type']}")
+                
+                if params_list:
+                    session['product_params'] = "\n".join(params_list)
+                
+                try:
+                    success = send_complete_application_to_telegram(session, full_conversation)
+                    
+                    if success:
+                        session['telegram_sent'] = True
+                        session['stage'] = 'completed'
+                        session['contacts_provided'] = True
+                        telegram_was_sent_now = True
+                        print(f"✅ Заявка отправлена в Telegram")
+                        
+                        # Подтверждение клиенту будет отправлено ниже
+                        
+                    else:
+                        print(f"⚠️ Ошибка отправки в Telegram")
+                except Exception as e:
+                    print(f"❌ Исключение при отправке в Telegram: {e}")
+            else:
+                print(f"ℹ️ Контакты есть, но нет явного намерения заказать")
+                print(f"   Намерение: {order_intent}, Товар: {product_mentioned}, Параметры: {has_params}")
+                session['contacts_provided'] = True
         
         # ===== ГЕНЕРАЦИЯ ОТВЕТА БОТА =====
         bot_reply = ""
