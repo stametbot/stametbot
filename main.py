@@ -591,10 +591,10 @@ async def chat_endpoint(request: Request):
                     )
                     
                     try:
-                        bot_reply = await asyncio.wait_for(ai_task, timeout=8.0)
-                        print(f"✅ AI ответ сгенерирован за <8 сек")
+                        bot_reply = await asyncio.wait_for(ai_task, timeout=15.0)
+                        print(f"✅ AI ответ сгенерирован за <15 сек")
                     except asyncio.TimeoutError:
-                        print(f"⚠️ Таймаут AI (8 сек), используем fallback")
+                        print(f"⚠️ Таймаут AI (15 сек), используем fallback")
                         ai_task.cancel()
                         bot_reply = get_fallback_response(user_message)
                         
@@ -623,10 +623,10 @@ async def chat_endpoint(request: Request):
                 )
                 
                 try:
-                    bot_reply = await asyncio.wait_for(ai_task, timeout=8.0)
-                    print(f"✅ AI ответ сгенерирован за <8 сек")
+                    bot_reply = await asyncio.wait_for(ai_task, timeout=15.0)
+                    print(f"✅ AI ответ сгенерирован за <15 сек")
                 except asyncio.TimeoutError:
-                    print(f"⚠️ Таймаут AI (8 сек), используем fallback")
+                    print(f"⚠️ Таймаут AI (15 сек), используем fallback")
                     ai_task.cancel()
                     bot_reply = get_fallback_response(user_message)
                 
