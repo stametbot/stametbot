@@ -107,21 +107,27 @@ def send_complete_application_to_telegram(session: Dict[str, Any], full_conversa
         if session.get('product_type'):  # для совместимости
             telegram_text += f"🪜 МОДЕЛЬ: {session['product_type']}\n"
         
+        # Параметры проема
         if session.get('opening_height'):
             telegram_text += f"📏 ВЫСОТА ПРОЕМА: {session['opening_height']}\n"
         
         if session.get('opening_params'):
             telegram_text += f"📐 ПАРАМЕТРЫ ПРОЕМА: {session['opening_params']}\n"
         
+        # Материал и цвет
         if session.get('material_interest'):
             telegram_text += f"🪵 МАТЕРИАЛ: {session['material_interest']}\n"
         
         if session.get('color_interest'):
             telegram_text += f"🎨 ЦВЕТ: {session['color_interest']}\n"
         
-        # Информация о типе лестницы (если есть в сессии)
+        # Тип лестницы
         if session.get('staircase_type'):
             telegram_text += f"🏗️ ТИП: {session['staircase_type']}\n"
+        
+        # Дополнительные параметры (если есть)
+        if session.get('product_params'):
+            telegram_text += f"\n📋 ДОПОЛНИТЕЛЬНЫЕ ПАРАМЕТРЫ:\n{session['product_params']}\n"
         
         # Источник
         source = session.get('source', 'Чат-бот на сайте')
