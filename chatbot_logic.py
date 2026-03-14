@@ -4,6 +4,82 @@ import re
 import json
 import os
 
+def detect_order_intent_with_ai(api_key: str, conversation_history: str, current_message: str) -> bool:
+    """
+    Использует AI для определения, хочет ли клиент заказать или рассчитать стоимость лестницы.
+    Возвращает True если клиент хочет заказать/рассчитать.
+    """
+    try:
+        prompt = f"""Проанализируй диалог и определи, хочет ли клиент заказать лестницу или рассчитать стоимость.
+
+ПРАВИЛА АНАЛИЗА:
+1. Клиент ХОЧЕТ заказать/рассчитать если:
+   - Явно говорит "хочу заказать", "сделайте заказ", "оформите заказ"
+   - Просит рассчитать стоимость для своих параметров
+   - Указывает высоту проема или другие параметры для расчета
+   - Дает свое имя и телефон после обсуждения модели
+   - Спрашивает "сколько будет стоить для моих размеров", "рассчитайте стоимость"
+
+2. Клиент НЕ хочет заказывать если:
+   - Только спрашивает информацию о моделях
+   - Просто интересуется ценами без конкретных параметров
+   - Обсуждает характеристики без планов покупки
+
+ИСТОРИЯ ДИАЛОГА:
+{conversation_history}
+
+ПОСЛЕДНЕЕ СООБЩЕНИЕ КЛИЕНТА:
+"{current_message}"
+
+ВОПРОС: Клиент хочет заказать или рассчитать стоимость? 
+
+ОТВЕТ (ТОЛЬКО "ДА" или "НЕТ"):"""
+
+        client = replicate.Client(api_token=api_key)
+        
+        output = client.run(
+            "meta/meta-llama-3-70b-instruct",
+            input={
+                "prompt": prompt,
+                "max_tokens": 10,
+                "temperature": 0.1,
+                "top_p": 0.9
+            }
+        )
+        
+        # Обрабатываем ответ
+        result = ""
+        if hasattr(output, '__iter__') and not isinstance(output, str):
+            for chunk in output:
+                if isinstance(chunk, str):
+                    result += chunk
+                else:
+                    result += str(chunk)
+        elif isinstance(output, str):
+            result = output
+        else:
+            result = str(output)
+        
+        result = result.strip().lower()
+        print(f"🤖 AI анализ намерения: '{result}'")
+        
+        if "да" in result:
+            return True
+        elif "нет" in result:
+            return False
+        else:
+            # Если AI дал неоднозначный ответ, проверяем по ключевым словам
+            current_lower = current_message.lower()
+            action_words = ["заказ", "хочу", "нужно", "можно", "готов", "давайте", "рассчитай", "сколько стоит", "цена"]
+            return any(word in current_lower for word in action_words)
+            
+    except Exception as e:
+        print(f"❌ Ошибка AI при анализе намерения: {str(e)}")
+        # Fallback только при ошибке AI
+        current_lower = current_message.lower()
+        action_words = ["заказ", "хочу", "нужно", "можно", "готов", "давайте", "рассчитай", "сколько стоит", "цена"]
+        return any(word in current_lower for word in action_words)
+
 # Загружаем каталог товаров из файла
 def load_products_catalog():
     """Загружает каталог товаров из файла products.json."""
