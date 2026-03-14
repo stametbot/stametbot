@@ -436,10 +436,14 @@ async def chat_endpoint(request: Request):
                 'message_count': 0,
                 'contacts_provided': False,
                 'product_mentioned': False,
-                'product_interest': None,
-                'material_interest': None,
-                'color_interest': None,
-                'opening_height': None
+                'product_interest': None,        # интересующая модель (престиж, элегант и т.д.)
+                'material_interest': None,       # материал (хвоя, бук)
+                'color_interest': None,           # цвет (слоновая кость, черный, алюминий)
+                'opening_height': None,           # высота проема в мм
+                'opening_length': None,           # длина проема (опционально)
+                'opening_width': None,            # ширина проема (опционально)
+                'staircase_type': None,           # тип (прямая, поворотная, разворотная)
+                'questions_answered': []          # ответы на уточняющие вопросы
             }
         
         session = user_sessions[user_ip]
