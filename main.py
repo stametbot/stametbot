@@ -242,6 +242,8 @@ def cleanup_old_sessions():
     except Exception as e:
         print(f"❌ Ошибка при очистке сессий: {e}")
 
+from typing import Dict, Any, Optional  # добавьте Optional в импорт в начале файла
+
 def extract_product_from_message(message: str) -> Optional[str]:
     """Извлекает упоминание товара из сообщения."""
     message_lower = message.lower()
@@ -289,7 +291,7 @@ def extract_opening_height(message: str) -> Optional[str]:
         height = float(m_matches[0].replace(',', '.')) * 1000
         return f"{int(height)} мм"
     
-    # Ищем просто числа, которые могут быть высотой
+    # Ищем просто числа, которые могут быть высотой (4-значные числа)
     numbers = re.findall(r'\b(\d{4})\b', message_lower)
     if numbers:
         return f"{numbers[0]} мм"
@@ -314,7 +316,7 @@ def extract_contacts_from_message(message: str, session: Dict[str, Any]):
             phone_matches.extend(matches)
             break
     
-    if phone_matches and not session['phone']:
+    if phone_matches and not session.get('phone'):
         raw_phone = phone_matches[0]
         clean_phone = re.sub(r'\D', '', raw_phone)
         
@@ -340,11 +342,11 @@ def extract_contacts_from_message(message: str, session: Dict[str, Any]):
         'вадим', 'рома', 'кирилл', 'игорь', 'вадим'
     ]
     
+    # Слова, которые не являются именами (названия моделей)
+    product_words = ['престиж', 'элегант', 'комфорт', 'мини', 'каркас', 'ступени', 'модуль']
+    
     for name in russian_names:
         name_lower = name.lower()
-        
-        # Слова, которые не являются именами (названия моделей)
-        product_words = ['престиж', 'элегант', 'комфорт', 'мини', 'каркас', 'ступени', 'модуль']
         
         is_product = any(prod in name_lower for prod in product_words)
         is_common_name = name_lower in common_russian_names
@@ -359,9 +361,11 @@ def extract_contacts_from_message(message: str, session: Dict[str, Any]):
         session['name'] = temp_name
         print(f"✅ Обновлено имя в сессии: {session['name']}")
     
-    if (not session['name'] or session['name'].lower() in ['привет', 'здравствуйте', 'добрый']) and REPLICATE_API_TOKEN and len(message.strip()) > 3:
+    # Используем AI для поиска имени, если не нашли регулярками
+    if (not session.get('name') or session.get('name', '').lower() in ['привет', 'здравствуйте', 'добрый']) and REPLICATE_API_TOKEN and len(message.strip()) > 3:
         try:
             print(f"🔍 Использую AI для поиска имени в: '{message[:30]}...'")
+            from chatbot_logic import extract_name_with_ai
             found_name = extract_name_with_ai(REPLICATE_API_TOKEN, message)
             
             if found_name and found_name.lower() not in ['привет', 'здравствуйте', 'добрый']:
