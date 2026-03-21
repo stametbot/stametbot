@@ -526,34 +526,34 @@ def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = F
             else:
                 return "Чем могу помочь?"
         
-        # 2. Специфичные вопросы
-        is_opening, opening_response = handle_opening_question(message)
-        if is_opening:
-            return opening_response
-        
-        is_material, material_response = handle_material_question(message)
-        if is_material:
-            return material_response
-        
-        is_color, color_response = handle_color_question(message)
-        if is_color:
-            return color_response
-        
-        is_installation, installation_response = handle_installation_question(message)
-        if is_installation:
-            return installation_response
-        
-        is_delivery, delivery_response = handle_delivery_question(message)
-        if is_delivery:
-            return delivery_response
-        
-        is_payment, payment_response = handle_payment_question(message)
-        if is_payment:
-            return payment_response
-        
-        is_timing, timing_response = handle_timing_question(message)
-        if is_timing:
-            return timing_response
+        # 2. Специфичные вопросы - закомментированы, всё через AI
+        # is_opening, opening_response = handle_opening_question(message)
+        # if is_opening:
+        #     return opening_response
+        # 
+        # is_material, material_response = handle_material_question(message)
+        # if is_material:
+        #     return material_response
+        # 
+        # is_color, color_response = handle_color_question(message)
+        # if is_color:
+        #     return color_response
+        # 
+        # is_installation, installation_response = handle_installation_question(message)
+        # if is_installation:
+        #     return installation_response
+        # 
+        # is_delivery, delivery_response = handle_delivery_question(message)
+        # if is_delivery:
+        #     return delivery_response
+        # 
+        # is_payment, payment_response = handle_payment_question(message)
+        # if is_payment:
+        #     return payment_response
+        # 
+        # is_timing, timing_response = handle_timing_question(message)
+        # if is_timing:
+        #     return timing_response
         
         # 3. Проверяем, явный ли это запрос на заказ
         basic_order_check = is_order_request(message)
@@ -687,6 +687,9 @@ def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = F
             result = re.sub(r'^Здравствуйте[!\.]?\s*', '', result)
             result = re.sub(r'^Добрый день[!\.]?\s*', '', result)
             result = re.sub(r'^Меня зовут Алина[!\.]?\s*', '', result)
+            result = re.sub(r'^Привет[!\.]?\s*', '', result)      # добавить
+            result = re.sub(r'^Hello[!\.]?\s*', '', result)       # добавить
+            result = re.sub(r'^😊\s*', '', result)                # добавить (убирает смайлик)
         
         return result
             
