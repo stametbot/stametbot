@@ -586,7 +586,8 @@ async def chat_endpoint(request: Request):
                             bool(session['name']),
                             bool(session['phone']),
                             True,  # telegram_sent = True (для контекста)
-                            product_interest
+                            product_interest,
+                            session.get('opening_height')
                         )
                     )
                     
@@ -618,7 +619,8 @@ async def chat_endpoint(request: Request):
                         bool(session['name']),
                         bool(session['phone']),
                         False,  # telegram_sent = False
-                        product_interest
+                        product_interest,
+                        session.get('opening_height')
                     )
                 )
                 
