@@ -507,7 +507,8 @@ def should_add_contacts_to_reply(user_message: str, bot_reply: str, is_first_mes
 
 def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = False, 
                       has_name: bool = False, has_phone: bool = False,
-                      telegram_sent: bool = False, last_product: str = None) -> str:
+                      telegram_sent: bool = False, last_product: str = None,
+                      opening_height: str = None) -> str:
     """Генерация ответа бота через Replicate API."""
     try:
         print(f"\n🤖 Генерация ответа AI")
@@ -580,6 +581,12 @@ def generate_bot_reply(api_key: str, message: str, is_first_in_session: bool = F
         if last_product:
             context_lines.append(f"\n📋 ИСТОРИЯ ТОВАРА:")
             context_lines.append(f"   • Ранее обсуждалась модель: {last_product}")
+        
+        # ВЫСОТА ПРОЕМА (важно!)
+        if opening_height:
+            context_lines.append(f"\n📏 ВЫСОТА ПРОЕМА (УЖЕ УКАЗАНА): {opening_height}")
+            context_lines.append(f"   • НЕ СПРАШИВАЙ высоту повторно!")
+            context_lines.append(f"   • Используй эту высоту для расчета стоимости")
         
         # Анализ текущего сообщения
         context_lines.append(f"\n🎯 АНАЛИЗ ТЕКУЩЕГО СООБЩЕНИЯ:")
